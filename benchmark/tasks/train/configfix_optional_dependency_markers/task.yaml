@@ -1,0 +1,60 @@
+id: configfix_optional_dependency_markers
+category: config_fix
+difficulty: medium
+split: train
+
+instruction: >
+  Three complaints about reportkit's optional features, in the order they arrive. First,
+  the spreadsheet renderer cannot be installed at all: users copy the `pip install` line
+  the library itself prints when the feature is missing, and pip answers that reportkit
+  provides no such extra. Second, asking for the YAML extra now fails to resolve, because
+  the templating library ends up requested two incompatible ways at once. Third, the fast
+  JSON extra installs perfectly happily, brings in nothing whatsoever, and the fast path
+  stays off with no error anywhere. Everything wrong is in the dependency declarations in
+  pyproject.toml. README.md sets out the three house rules this project keeps for those
+  declarations, and says which file is the authority on what the optional features are
+  called. The Python under reportkit/ is correct and must not be changed - in particular
+  the table of supported extras is the specification, so do not edit it to agree with the
+  metadata.
+
+repo:
+  root: repo/
+  loc: 83
+  entrypoint_hint: pyproject.toml
+
+verification:
+  runner: pytest
+  test_files: [tests/test_extras.py]
+  timeout_s: 60
+  n_tests: 13
+
+constraints:
+  allowed_write_globs:
+    - "repo/pyproject.toml"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+    - "repo/reportkit/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: textbook_pattern
+  license: MIT
+  notes: >
+    Extras are declared in one file and consumed in another, and nothing links the two,
+    so the names drift. The three faults here are the ones that actually recur: an extra
+    renamed on one side only, an environment marker left behind by a requires-python
+    bump so the extra resolves to the empty set, and a debugging pin duplicated into an
+    extra where it now contradicts the core dependency. The silent one - the extra that
+    installs nothing and reports success - is the reason this is graded on marker
+    satisfiability rather than on syntax. Authored for this benchmark; no specific
+    upstream commit was inverted.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [packaging, pyproject, extras, environment-markers, dependencies]

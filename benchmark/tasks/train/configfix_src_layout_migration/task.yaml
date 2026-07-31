@@ -1,0 +1,59 @@
+id: configfix_src_layout_migration
+category: config_fix
+difficulty: hard
+split: train
+
+instruction: >
+  Since the 2.0.0 rename this project cannot be imported or tested. Running `pytest` from
+  the project root collects nothing but ImportError, and doing `import dataspec` by hand
+  after an editable install raises ModuleNotFoundError naming a package that no longer
+  exists anywhere in the tree. A build succeeds and produces a wheel with no Python in it
+  at all. The 2.0.0 change renamed the distribution and moved the importable package from
+  a flat layout into `src/`; the code was moved, and several things that record where the
+  code is were not. README.md states where the package now lives and the four house rules
+  this project holds itself to about naming, imports, build paths and how the test run
+  puts the package on the import path. The Python is correct: fields.py, rules.py and
+  validate.py must not be touched, and re-creating the old top-level package to satisfy a
+  stale reference is not a fix. Finish the move.
+
+repo:
+  root: repo/
+  loc: 116
+verification:
+  runner: pytest
+  test_files: [tests/test_layout.py]
+  timeout_s: 60
+  n_tests: 14
+
+constraints:
+  allowed_write_globs:
+    - "repo/pyproject.toml"
+    - "repo/src/dataspec/__init__.py"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+    - "repo/src/dataspec/fields.py"
+    - "repo/src/dataspec/rules.py"
+    - "repo/src/dataspec/validate.py"
+    - "repo/tests/**"
+  max_turns: 30
+  max_tool_calls: 60
+
+provenance:
+  source: textbook_pattern
+  license: MIT
+  notes: >
+    Half-finished flat-to-src migrations are the classic multi-cause packaging failure:
+    the wheel build path, the pytest import path, one absolute intra-package import and
+    the distribution name are four independent records of where the code lives, and
+    moving a directory updates none of them. Every one of them surfaces as some flavour
+    of ImportError, a long way from its cause, which is what makes this hard rather than
+    fiddly. Authored for this benchmark; no specific upstream commit was inverted.
+
+metadata:
+  expected_files_changed: 2
+  created: 2026-07-31
+  tags: [packaging, pyproject, src-layout, imports, pytest-config]

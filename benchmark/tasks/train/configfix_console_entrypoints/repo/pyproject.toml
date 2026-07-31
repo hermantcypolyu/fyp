@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "logtidy"
+version = "1.2.0"
+description = "Filter and summarise plain-text log files."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "logtidy contributors" }]
+keywords = ["logging", "cli", "logs"]
+classifiers = [
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://example.invalid/logtidy"
+
+[project.scripts]
+logtidy = "logtidy.console:main"
+logtidy-summary = "logtidy.stats:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["logtidy"]
+
+[tool.ruff]
+line-length = 100

@@ -1,0 +1,58 @@
+id: configfix_console_entrypoints
+category: config_fix
+difficulty: medium
+split: train
+
+instruction: >
+  Neither command logtidy installs will start. `logtidy app.log` dies immediately with
+  ModuleNotFoundError for a module inside the package, and `logtidy-summary app.log` dies
+  the same way naming a different module. The console wrappers are generated verbatim
+  from the `[project.scripts]` table in pyproject.toml, so the fault is in what that table
+  points at rather than in the code it points at: release 1.2.0 renamed one module along
+  with its entry function, and deleted another module after folding its behaviour into a
+  surviving one, and the packaging metadata was never brought along. README.md records
+  both renames and states, for each of the two commands this project ships, which module
+  implements it and the exact name and signature of the entry function. The Python under
+  logtidy/ is correct and must not be changed: do not re-add a deleted module, rename a
+  module back, or add an alias to make the current metadata true. Make the declared entry
+  points name callables that already exist.
+
+repo:
+  root: repo/
+  loc: 141
+  entrypoint_hint: pyproject.toml
+
+verification:
+  runner: pytest
+  test_files: [tests/test_entry_points.py]
+  timeout_s: 60
+  n_tests: 14
+
+constraints:
+  allowed_write_globs:
+    - "repo/pyproject.toml"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+    - "repo/logtidy/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: textbook_pattern
+  license: MIT
+  notes: >
+    Console-script entry points rot silently, because nothing imports them until an
+    install generates the wrapper: the module half and the callable half are two
+    independent strings that no import statement in the project ever exercises. Renaming
+    a CLI module, renaming its entry function, and deleting a module whose behaviour
+    moved elsewhere are three ordinary refactors that each leave [project.scripts]
+    stale. Authored for this benchmark; no specific upstream commit was inverted.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [packaging, pyproject, entry-points, console-scripts, cli]
