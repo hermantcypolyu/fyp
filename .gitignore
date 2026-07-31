@@ -1,0 +1,74 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib60/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- Environments ---
+.venv/
+venv/
+ENV/
+.env
+env.yaml
+
+# --- Caches / tooling ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+.ipynb_checkpoints/
+
+# --- Model weights & checkpoints: NEVER commit (spec 1.5) ---
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.gguf
+*.onnx
+checkpoints/
+models/
+hf_cache/
+.cache/
+
+# --- Run artefacts ---
+# results/raw/** is tracked selectively: small JSON is fine, everything else is not.
+results/**/*.jsonl
+results/**/*.log
+results/**/sandbox/
+!results/raw/.gitkeep
+
+# --- Sandbox scratch ---
+.sandbox/
+sandboxes/
+*.patch.tmp
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Vendored third-party clones (kept OUTSIDE the repo; guard anyway) ---
+_vendor/
+third_party/
+nemo-gym/

@@ -1,0 +1,26 @@
+{
+  "checked_at": "2026-07-31T15:18:21+00:00",
+  "gym_path": "C:\\Users\\233282\\Downloads\\NVIDIA FYP\\_vendor\\nemo-gym",
+  "gym_commit": "ec5a8136046aa0dd0c1525313654502f2fb7c42e",
+  "python": "3.12.10",
+  "platform": "win32",
+  "environments": {
+    "example_single_tool_call": {
+      "tool_status": 200,
+      "tool_body": {
+        "city": "Hong Kong",
+        "weather_description": "The weather in Hong Kong is cold."
+      },
+      "verify_status": 200,
+      "reward": 1.0
+    },
+    "example_session_state_mgmt": {
+      "seed_status": 200,
+      "counter_after_two_increments": 22,
+      "verify_status": 200,
+      "reward": 1.0,
+      "session_keys_held_by_server": 1
+    }
+  },
+  "all_checks_passed": true
+}

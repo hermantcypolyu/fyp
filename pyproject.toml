@@ -1,0 +1,61 @@
+[project]
+name = "rl-coding-agents"
+version = "0.1.0"
+description = "RL of small coding agents with verifiable rewards - benchmark, NeMo Gym environment, and literature base (build-only phase)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Yeung Tsz Chun Herman" }]
+
+# Core dependencies are deliberately tiny and pure-Python so that `uv sync`
+# works on any OS in under a minute and `make validate` needs no GPU, no
+# Docker and no NeMo Gym install. See docs/decisions/0002-core-deps-minimal.md
+dependencies = [
+    "pyyaml>=6.0",
+    "jsonschema>=4.21",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# The NeMo Gym server stack. Linux/macOS only in practice - nemo-gym declares
+# `uvloop`, which has no Windows build. See docs/nemo_gym_notes.md.
+gym = ["nemo-gym>=0.4.0"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["rewards", "analysis", "envs"]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
+
+[tool.uv]
+# nemo-gym pulls in `uvloop`, which refuses to build on Windows. Constraining it
+# to POSIX lets the `gym` extra resolve on a Windows dev box without patching a
+# single line of NeMo Gym source (spec 1.3: never modify vendored source).
+override-dependencies = ["uvloop; sys_platform != 'win32'"]
+
+[tool.pytest.ini_options]
+testpaths = ["rewards/tests", "analysis", "envs", "benchmark"]
+python_files = ["test_*.py"]
+addopts = "-q"
+markers = [
+    "gym: requires the optional nemo-gym stack (Linux/macOS)",
+    "slow: takes more than a few seconds",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+# Vendored task repos are intentionally buggy - they are data, not source.
+extend-exclude = ["benchmark/tasks/**", ".venv", "results"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.coverage.run]
+omit = ["benchmark/tasks/*", "*/tests/*"]
