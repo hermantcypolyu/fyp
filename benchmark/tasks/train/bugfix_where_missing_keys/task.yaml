@@ -1,0 +1,68 @@
+id: bugfix_where_missing_keys
+category: bug_fix
+difficulty: medium
+split: train
+
+instruction: >
+  funcy/colls.py offers where() and its lazy twin iwhere() for picking records out of a
+  list of dicts by keyword condition, for example where(rows, status='open'). They work
+  when every record carries every key that is named in the condition, but real record
+  sets are ragged - some rows simply do not have the field - and then instead of skipping
+  the record that lacks the key, both functions blow up with a KeyError and the caller
+  loses the whole result. A record that does not carry a key named in the condition
+  cannot possibly match it, so it should just be filtered out, and a condition naming a
+  key that no record has should yield an empty result rather than an error. Be careful
+  that a key which is genuinely present but holds None is still different from a key that
+  is absent. Do not change any public signature, do not change which of the two functions
+  is eager and which is lazy, and fix both of them - callers use each.
+
+repo:
+  root: repo/
+  loc: 181
+  entrypoint_hint: funcy/colls.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_colls.py]
+  timeout_s: 60
+  n_tests: 12
+
+constraints:
+  allowed_write_globs:
+    - "repo/funcy/colls.py"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: real_repo
+  origin: https://github.com/Suor/funcy @ e068b64005b0f3c432311a7584b82d4e08420a67
+  license: BSD-3-Clause
+  notes: >
+    Upstream commit e068b64005b0 (2017-09-25), "Don't crash in where on nonexistent keys
+    from conditions". Both where() and iwhere() indexed the mapping directly inside their
+    match predicate, so any record missing a key named in the condition raised KeyError
+    instead of failing to match. colls.py is taken from the commit's PARENT and
+    solution/fixed/ from the commit itself, so the gold patch is the maintainer's actual
+    fix, applied to both functions. Reductions to fit the size budget: colls.py is trimmed
+    to FACTORY_REPLACE, _factory, empty, zipdict, project and the where/pluck/invoke
+    families with benchmark/tools/trim_module.py, so the kept code is byte-identical to
+    upstream apart from one compatibility edit noted below; funcy/seqs.py (383 lines),
+    funcy/funcs.py (98 lines, and it imports a funcy._inspect module this extract does not
+    carry) and funcy/funcmakers.py (which imports funcy.strings for its regex branch) are
+    replaced by small working shims providing only the names colls.py imports;
+    funcy/cross.py and funcy/primitives.py are upstream's, untrimmed. The one edit to
+    kept code: this 2017 snapshot does `from collections import Mapping, Set, Iterable,
+    Iterator, defaultdict`, which has been an ImportError since Python 3.10, so the four
+    ABCs are imported from collections.abc instead. The same edit is applied to
+    solution/fixed/, so it does not appear in the gold patch.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [keyerror, predicate, ragged-records, real-repo, funcy]

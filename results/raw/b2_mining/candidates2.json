@@ -1,0 +1,297 @@
+{
+  "https://github.com/pallets/itsdangerous": {
+    "licence": "BSD",
+    "head": "672971d66a2ef9f85151e53283113f33d642dabd",
+    "candidates": []
+  },
+  "https://github.com/theskumar/python-dotenv": {
+    "licence": "BSD",
+    "head": "751f8c148222e58aa173c83c4e5e6cfccb2cc124",
+    "candidates": [
+      {
+        "sha": "bca6644d9aedbe287b792b756b3ae3d650cd0d3a",
+        "date": "2026-04-19",
+        "subject": "fix: strip UTF-8 BOM from .env files (#640)",
+        "source_files": [
+          "src/dotenv/parser.py"
+        ],
+        "test_files": [
+          "tests/test_parser.py"
+        ],
+        "source_lines": 2,
+        "test_lines": 29,
+        "score": 90
+      },
+      {
+        "sha": "8411987b9301f716245074872afa30646e9b9eb7",
+        "date": "2025-05-30",
+        "subject": "fix: ensure find_dotenv work reliably on python 3.13 (#563)",
+        "source_files": [
+          "src/dotenv/main.py"
+        ],
+        "test_files": [
+          "tests/test_is_interactive.py"
+        ],
+        "source_lines": 2,
+        "test_lines": 227,
+        "score": 90
+      },
+      {
+        "sha": "e92ab1f18087c2ca058203f36535c43a0f824d8a",
+        "date": "2020-04-29",
+        "subject": "Fix file not found message to have some context (#245)",
+        "source_files": [
+          "src/dotenv/main.py"
+        ],
+        "test_files": [
+          "tests/test_main.py"
+        ],
+        "source_lines": 2,
+        "test_lines": 15,
+        "score": 90
+      },
+      {
+        "sha": "1f973777ddf50006c3a028fd3aa02f39215ba562",
+        "date": "2018-12-14",
+        "subject": "Fix parsing of variable without a value (#158)",
+        "source_files": [
+          "dotenv/main.py"
+        ],
+        "test_files": [
+          "tests/test_core.py"
+        ],
+        "source_lines": 6,
+        "test_lines": 7,
+        "score": 90
+      },
+      {
+        "sha": "5238808e215b3cbd227c228e0f7df74a3203515c",
+        "date": "2018-07-11",
+        "subject": "Fix: enable loading from current directory (#109)",
+        "source_files": [
+          "dotenv/main.py"
+        ],
+        "test_files": [
+          "tests/test_core.py"
+        ],
+        "source_lines": 6,
+        "test_lines": 15,
+        "score": 90
+      },
+      {
+        "sha": "bc439674fe718bcff3039e3239602de3c23e42e4",
+        "date": "2020-02-21",
+        "subject": "Fix dotenv run crashes on variable without values",
+        "source_files": [
+          "src/dotenv/cli.py"
+        ],
+        "test_files": [
+          "tests/test_cli.py"
+        ],
+        "source_lines": 7,
+        "test_lines": 11,
+        "score": 90
+      }
+    ]
+  },
+  "https://github.com/Suor/funcy": {
+    "licence": "BSD",
+    "head": "9eb04473e31b6b60bd459e4dda24f6b1db5a3773",
+    "candidates": [
+      {
+        "sha": "6c111987f25eb8371e33b71f8b76e2975c30617d",
+        "date": "2021-05-09",
+        "subject": "Fix @throttle() for timedelta arg",
+        "source_files": [
+          "funcy/flow.py"
+        ],
+        "test_files": [
+          "tests/test_flow.py"
+        ],
+        "source_lines": 2,
+        "test_lines": 7,
+        "score": 90
+      },
+      {
+        "sha": "4a5e9df9d65c1dc980a1aeb5f2e0f837eae689e4",
+        "date": "2017-06-11",
+        "subject": "Fix empty() on iterators",
+        "source_files": [
+          "funcy/colls.py"
+        ],
+        "test_files": [
+          "tests/test_colls.py"
+        ],
+        "source_lines": 2,
+        "test_lines": 5,
+        "score": 90
+      },
+      {
+        "sha": "da4040a5d93b8d59157279d45e92281eb569a3f5",
+        "date": "2017-05-16",
+        "subject": "Fix @decorator with more than one default",
+        "source_files": [
+          "funcy/decorators.py"
+        ],
+        "test_files": [
+          "tests/test_decorators.py"
+        ],
+        "source_lines": 2,
+        "test_lines": 12,
+        "score": 90
+      },
+      {
+        "sha": "e068b64005b0f3c432311a7584b82d4e08420a67",
+        "date": "2017-09-25",
+        "subject": "Don't crash in where on nonexistent keys from conditions",
+        "source_files": [
+          "funcy/colls.py"
+        ],
+        "test_files": [
+          "tests/test_colls.py"
+        ],
+        "source_lines": 4,
+        "test_lines": 5,
+        "score": 90
+      },
+      {
+        "sha": "69ecfed3598facf759cc4763853dd50f4024ec92",
+        "date": "2017-05-16",
+        "subject": "Fix using defaults in double @decorated function",
+        "source_files": [
+          "funcy/decorators.py"
+        ],
+        "test_files": [
+          "tests/test_decorators.py"
+        ],
+        "source_lines": 8,
+        "test_lines": 17,
+        "score": 90
+      },
+      {
+        "sha": "387ba2fad33fbe413c8f1d317634675d93c8e35a",
+        "date": "2017-06-11",
+        "subject": "Fix select*(), walk*(), etc for dict keys, values and items in python 3",
+        "source_files": [
+          "funcy/colls.py"
+        ],
+        "test_files": [
+          "tests/test_colls.py"
+        ],
+        "source_lines": 11,
+        "test_lines": 14,
+        "score": 90
+      }
+    ]
+  },
+  "https://github.com/more-itertools/more-itertools": {
+    "licence": "unrecognised - read it yourself",
+    "head": "9ddc55c57390707d97d96302eea1992919c8d930",
+    "candidates": [
+      {
+        "sha": "b0aa91efbb452eeb8ffa0447047519c6e84d5292",
+        "date": "2025-12-30",
+        "subject": "Fix random_product() as well",
+        "source_files": [
+          "more_itertools/recipes.py"
+        ],
+        "test_files": [
+          "tests/test_recipes.py"
+        ],
+        "source_lines": 2,
+        "test_lines": 8,
+        "score": 90
+      },
+      {
+        "sha": "cca32949f12d473fd823e37a5530c30d2faa1332",
+        "date": "2025-07-13",
+        "subject": "fix last() when __reversed__ is None",
+        "source_files": [
+          "more_itertools/more.py"
+        ],
+        "test_files": [
+          "tests/test_more.py"
+        ],
+        "source_lines": 2,
+        "test_lines": 10,
+        "score": 90
+      },
+      {
+        "sha": "62411c1618493f94b16901746c34e72ad415061e",
+        "date": "2020-03-29",
+        "subject": "Fix spy to make returned iterable immutable",
+        "source_files": [
+          "more_itertools/more.py"
+        ],
+        "test_files": [
+          "tests/test_more.py"
+        ],
+        "source_lines": 2,
+        "test_lines": 9,
+        "score": 90
+      },
+      {
+        "sha": "cf186b5de4797602fef76c3391da2d110b88a954",
+        "date": "2025-10-10",
+        "subject": "Fix product_index() with iterator input",
+        "source_files": [
+          "more_itertools/more.py"
+        ],
+        "test_files": [
+          "tests/test_more.py"
+        ],
+        "source_lines": 3,
+        "test_lines": 6,
+        "score": 90
+      },
+      {
+        "sha": "49a4b3c94b0d71cc4576df3df9ca90197b5ec9fc",
+        "date": "2021-08-01",
+        "subject": "Fix bugs in chunked_even",
+        "source_files": [
+          "more_itertools/more.py"
+        ],
+        "test_files": [
+          "tests/test_more.py"
+        ],
+        "source_lines": 3,
+        "test_lines": 22,
+        "score": 90
+      },
+      {
+        "sha": "2e81a562fbaccc996c19c069090a53f52ec894fe",
+        "date": "2021-03-10",
+        "subject": "Fix split_before for an empty collections.",
+        "source_files": [
+          "more_itertools/more.py"
+        ],
+        "test_files": [
+          "tests/test_more.py"
+        ],
+        "source_lines": 3,
+        "test_lines": 5,
+        "score": 90
+      }
+    ]
+  },
+  "https://github.com/seatgeek/thefuzz": {
+    "licence": "MIT",
+    "head": "1ba86f33a19deedcf886b74cf6efffd79495a50f",
+    "candidates": [
+      {
+        "sha": "8478738ca92fcc345c3800543476e172de4d354c",
+        "date": "2023-04-16",
+        "subject": "fix QRatio test",
+        "source_files": [
+          "thefuzz/fuzz.py"
+        ],
+        "test_files": [
+          "test_thefuzz.py"
+        ],
+        "source_lines": 3,
+        "test_lines": 2,
+        "score": 75
+      }
+    ]
+  }
+}

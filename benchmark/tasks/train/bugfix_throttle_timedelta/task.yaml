@@ -1,0 +1,64 @@
+id: bugfix_throttle_timedelta
+category: bug_fix
+difficulty: medium
+split: train
+
+instruction: >
+  The @throttle decorator in funcy/flow.py is documented to take a period, and callers
+  have started passing that period as a datetime.timedelta instead of a plain number of
+  seconds because it reads better at the call site. It does not work: decorating a
+  function with a timedelta period blows up immediately with a TypeError, before the
+  decorated function has been called even once, so the module fails to import wherever
+  someone has written it that way. A numeric period is unaffected and behaves correctly.
+  Make a timedelta period behave exactly like the equivalent number of seconds, including
+  fractional periods such as half a second and long periods of a day or more. The public
+  signature must not change - throttle still takes one argument and returns a decorator -
+  and the existing numeric behaviour, including the fact that the deadline is computed
+  from time.time(), must stay exactly as it is.
+
+repo:
+  root: repo/
+  loc: 193
+  entrypoint_hint: funcy/flow.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_flow.py]
+  timeout_s: 60
+  n_tests: 11
+
+constraints:
+  allowed_write_globs:
+    - "repo/funcy/flow.py"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: real_repo
+  origin: https://github.com/Suor/funcy @ 6c111987f25eb8371e33b71f8b76e2975c30617d
+  license: BSD-3-Clause
+  notes: >
+    Upstream commit 6c111987f25e (2021-05-09), "Fix @throttle() for timedelta arg". The
+    conversion branch called the unbound method - timedelta.total_seconds() with no
+    receiver - so any timedelta period raised TypeError at decoration time. flow.py is
+    taken from the commit's PARENT and solution/fixed/ from the commit itself, so the gold
+    patch is the maintainer's actual one-word fix. Reductions to fit the size budget:
+    flow.py is trimmed to raiser, ignore, silent, _ensure_exceptable, _is_exception_type,
+    ErrorRateExceeded, limit_error_rate and throttle with benchmark/tools/trim_module.py,
+    so the kept code is byte-identical to upstream; funcy/decorators.py (310 lines of
+    decorator factories, argument introspection and Python-2 contextlib backports, of
+    which the kept code uses only wraps) is replaced by a small working shim providing the
+    five names flow.py imports; funcy/compat.py is upstream's, untrimmed. Determinism: the
+    upstream test already injects a fake clock by monkeypatching time.time rather than
+    sleeping, and the hidden suite keeps that, so no test here reads a real clock.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [unbound-method, type-coercion, decorator, real-repo, funcy]

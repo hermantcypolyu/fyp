@@ -1,0 +1,60 @@
+id: bugfix_dotenv_bom_prefix
+category: bug_fix
+difficulty: medium
+split: train
+
+instruction: >
+  Users on Windows keep reporting that the very first variable in their .env file is
+  missing at runtime while every other variable loads fine. The cause is that some editors
+  save the file with a leading byte-order mark. It is invisible, it is not whitespace, and
+  nothing removes it, so it ends up glued to the front of the first key: the entry parses
+  without error but under a name nobody will ever look up. When the first line uses an
+  export prefix the file does not even parse cleanly. Fix the parser in dotenv/parser.py so
+  a leading byte-order mark is discarded before parsing begins, including in the original
+  text each binding records. Strip it only where it is meaningless - at the very start of
+  the document. The same character appearing anywhere else is ordinary data and must be
+  left alone.
+
+repo:
+  root: repo/
+  loc: 151
+  entrypoint_hint: dotenv/parser.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_parser.py]
+  timeout_s: 60
+  n_tests: 12
+
+constraints:
+  allowed_write_globs:
+    - "repo/dotenv/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: real_repo
+  origin: https://github.com/theskumar/python-dotenv @ bca6644d9aedbe287b792b756b3ae3d650cd0d3a
+  license: BSD-3-Clause
+  notes: >
+    Upstream commit bca6644d9aed (2026-04-19), "fix: strip UTF-8 BOM from .env files
+    (#640)", which fixes issue #637. dotenv/parser.py is taken verbatim from that commit's
+    PARENT, so the defect is the one that really shipped; solution/fixed/ is the same file
+    at the commit itself, so the gold patch is the contributor's actual fix. Nothing was
+    trimmed: parser.py is self-contained and depends only on the standard library. Only
+    dotenv/__init__.py was added, re-exporting the three names the tests use, because
+    upstream's package __init__ pulls in the CLI and environment-loading layers that have
+    no bearing on parsing. Assertions follow the regression test added in that commit,
+    regrouped from one @parametrize into behaviour-sized tests and extended with the
+    export-prefix, quoted-value and mid-file cases that the same code path reaches.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [encoding, byte-order-mark, parsing, windows, real-repo, python-dotenv]
