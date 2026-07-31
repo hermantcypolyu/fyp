@@ -207,7 +207,7 @@ def _extract_test_update(args, clone, sha, parent, subject, cdate, origin, packa
             today=date.today().isoformat(),
         )
         # The library is correct in a test_update task; only the suite may be edited.
-        body = body.replace('    - "repo/smoke/**"\n', '    - "repo/smoke/**"\n    - "repo/%s/**"\n' % package)
+        body = body.replace('    - "repo/smoke/**"\n', f'    - "repo/smoke/**"\n    - "repo/{package}/**"\n')
         yaml_path.write_text(body, encoding="utf-8", newline="\n")
 
     print(f"\nrepo/ is {repo_loc} lines of code")
