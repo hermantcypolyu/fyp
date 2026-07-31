@@ -1,0 +1,63 @@
+id: bugfix_metric_zero_domain_error
+category: bug_fix
+difficulty: easy
+split: train
+
+instruction: >
+  metric() blows up on a value of zero. Instead of returning a formatted string it raises
+  ValueError with a math domain error, because the exponent that chooses the SI prefix is
+  taken from the base-10 logarithm of the magnitude, and that is undefined at zero. Any
+  caller rendering a series of readings therefore dies the moment one of them is zero, in
+  every mode - with a unit, without one, and at any precision. Fix humanize/number.py so
+  zero renders the way any other value needing no prefix does: the mantissa formatted to
+  the requested precision, no prefix letter, and the unit appended under the usual spacing
+  rule, which omits the space for a degree sign. That means a constant string is not an
+  acceptable answer, because the precision and the unit both still have to be honoured.
+  Nothing else may change: values that already format correctly, including the fallback to
+  scientific notation beyond the prefix range, must be left exactly as they are, and the
+  public signature must stay as it is.
+
+repo:
+  root: repo/
+  loc: 115
+  entrypoint_hint: humanize/number.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_number.py]
+  timeout_s: 60
+  n_tests: 12
+
+constraints:
+  allowed_write_globs:
+    - "repo/humanize/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: real_repo
+  origin: https://github.com/python-humanize/humanize @ b1ee6875820839a59f1b6f4a5fedc7cad8883834
+  license: MIT
+  notes: >
+    Upstream commit b1ee68758208 (2022-08-08), "Fix metric(0) crash." humanize/number.py
+    is taken from that commit's PARENT, so the unguarded math.log10 call is the code that
+    really shipped; solution/fixed/ is the same file at the commit itself, so the gold
+    patch is the contributor's actual one-line fix. Assertions come from tests/test_number.py
+    at the same commit, regrouped from one large @parametrize into behaviour-sized tests so
+    that partial credit is meaningful, and extended with cases of the same kind that vary
+    the unit and the precision at zero. Upstream number.py is 455 lines covering nine
+    unrelated helpers; everything except metric() and the scientific() it falls back to was
+    deleted to fit the size budget, and the retained code is byte-identical to upstream.
+    Deleting the other helpers also removed the only users of the gettext wrappers, so the
+    i18n imports and module went with them rather than being left dangling.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [domain-error, edge-case, logarithm, real-repo, humanize]

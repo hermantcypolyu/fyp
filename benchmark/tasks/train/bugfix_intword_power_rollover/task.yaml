@@ -1,0 +1,57 @@
+id: bugfix_intword_power_rollover
+category: bug_fix
+difficulty: hard
+split: train
+
+instruction: >
+  intword names very large numbers, and it goes wrong at the very top of its scale table.
+  A value of 10^36 should read "1000.0 decillion" - decillion is the largest name the
+  table carries, so the number in front of it is allowed to run past a thousand - but it
+  instead comes back as a tiny fraction of a completely different, much larger unit. The
+  same happens for 1.1x10^36 and 2.1x10^36. Everywhere lower down the table the behaviour
+  is right and must stay right: 999999999 still has to read "1.0 billion" rather than
+  "1000.0 million", because rounding genuinely does carry there. Fix humanize/number.py.
+  The scale table itself is correct; do not change its entries.
+
+repo:
+  root: repo/
+  loc: 257
+  entrypoint_hint: humanize/number.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_number.py]
+  timeout_s: 60
+  n_tests: 9
+constraints:
+  allowed_write_globs:
+    - "repo/humanize/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 25
+  max_tool_calls: 50
+
+provenance:
+  source: real_repo
+  origin: https://github.com/python-humanize/humanize @ 8705e2967ee610a36143e2379bf091d75a1ed9b7
+  license: MIT
+  notes: >
+    Upstream commit 8705e2967ee6 (2023-01-04), "Fix intword for 1000 decillion". The carry
+    check hardcoded 10**3 as the ratio between adjacent scales, which holds everywhere in
+    the table except between the last two entries (10**33 and 10**100). number.py is taken
+    from the commit's PARENT and solution/fixed/ from the commit itself, so the gold patch
+    is the maintainer's actual fix. Rated hard because the symptom only appears at one end
+    of the input range and the obvious repair - deleting the carry branch - breaks the
+    lower boundaries it exists to handle. Reductions to fit the size budget: number.py is
+    trimmed to _format_not_finite, ordinal, intcomma, powers, human_powers and intword
+    with benchmark/tools/trim_module.py (kept code is byte-identical to upstream), and
+    humanize/i18n.py is replaced by the behaviour gettext has with no locale active.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [boundary-condition, hardcoded-constant, scale-table, real-repo, humanize]

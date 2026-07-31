@@ -1,0 +1,62 @@
+id: bugfix_naturalsize_float_bytes
+category: bug_fix
+difficulty: easy
+split: train
+
+instruction: >
+  naturalsize() leaks raw floating-point noise when the size is small enough to be
+  reported in plain bytes. A file measured as 1.123456789 bytes comes back as
+  "1.123456789 Bytes" rather than "1 Bytes", and the same happens in GNU and binary
+  modes and for numeric strings, which are parsed as floats before anything else. Only
+  the branch that reports a plain byte count is affected: once the value is large enough
+  to pick up a kB, MiB or K suffix the format string trims it, which is why this went
+  unnoticed. Fix humanize/filesize.py so a plain byte count is always rendered as a whole
+  number, discarding any fraction rather than rounding it, and keeping the sign of
+  negative values. The public signature must not change, and values large enough to carry
+  a suffix must still be formatted from the exact input so custom format strings keep
+  their precision.
+
+repo:
+  root: repo/
+  loc: 94
+  entrypoint_hint: humanize/filesize.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_filesize.py]
+  timeout_s: 60
+  n_tests: 12
+
+constraints:
+  allowed_write_globs:
+    - "repo/humanize/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: real_repo
+  origin: https://github.com/python-humanize/humanize @ 11e62eeedb8990298c3612af82376dc2344d24f8
+  license: MIT
+  notes: >
+    Upstream commit 11e62eeedb89 (2025-02-17), "Fix regression in naturalsize for float".
+    humanize/filesize.py is taken verbatim from that commit's PARENT, so the defect is the
+    regression that really shipped; solution/fixed/ is the same file at the commit itself,
+    so the gold patch is the maintainer's actual fix. The assertions come from
+    tests/test_filesize.py at the same commit, regrouped from one large @parametrize into
+    behaviour-sized tests so that partial credit is meaningful, and extended with cases of
+    the same kind (a fraction just under the first unit, a negative fraction, a numeric
+    string) that the upstream parametrisation reaches only through its sign-flipping
+    retest. Nothing was trimmed from the module: filesize.py at this commit is 89 lines
+    and has no first-party imports, so it stands alone. Only humanize/__init__.py was
+    added, re-exporting naturalsize so the reduced package imports.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [float-formatting, truncation, real-repo, humanize]

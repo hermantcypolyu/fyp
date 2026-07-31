@@ -1,0 +1,57 @@
+id: bugfix_intcomma_zero_ndigits
+category: bug_fix
+difficulty: easy
+split: train
+
+instruction: >
+  Reports that ask for whole-number currency amounts are coming out with full floating
+  point precision. Asking intcomma for a value rounded to zero decimal places returns the
+  unrounded number instead: 1234.5454545 comes back as "1,234.5454545" when it should be
+  "1,235". Asking for one, two or ten decimal places works correctly, and so does leaving
+  the argument out entirely. Fix humanize/number.py. Leaving the digit count unset, or
+  setting it explicitly to nothing, must continue to return the value with its precision
+  untouched - that path is relied on elsewhere and must not start rounding.
+
+repo:
+  root: repo/
+  loc: 200
+  entrypoint_hint: humanize/number.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_number.py]
+  timeout_s: 60
+  n_tests: 11
+
+constraints:
+  allowed_write_globs:
+    - "repo/humanize/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: real_repo
+  origin: https://github.com/python-humanize/humanize @ 03863fed6c2ba02cfd13d5b1e0b161f680c7b966
+  license: MIT
+  notes: >
+    Upstream commit 03863fed6c2b (2022-06-21), "Fix intcomma with ndigits=0". The truthiness
+    test `if ndigits:` treats a legitimate request for zero decimal places as "no request
+    at all". number.py is taken from the commit's PARENT, so the defect is the one that
+    really shipped; solution/fixed/ is the same file at the commit, so the gold patch is
+    the maintainer's actual fix. Two reductions to fit the size budget: number.py is
+    trimmed to ordinal, intcomma and apnumber with benchmark/tools/trim_module.py (the
+    kept code is byte-identical to upstream), and humanize/i18n.py is replaced by the
+    behaviour gettext has when no locale is active. The import sites are untouched.
+    The upstream fix also corrected a docstring capitalisation on the same line range;
+    that is carried along in the gold patch as it was committed.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [truthiness, falsy-zero, formatting, real-repo, humanize]
