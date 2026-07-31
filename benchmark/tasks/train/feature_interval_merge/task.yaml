@@ -1,0 +1,64 @@
+id: feature_interval_merge
+category: small_feature
+difficulty: easy
+split: train
+
+instruction: >
+  The booking report adds interval lengths straight up, so a room held twice from nine
+  to ten reads as two hours occupied, and there is no way at all to answer the question
+  the front desk asks, which is when the room is free. Add merge(intervals) and
+  complement(intervals, window) to the intervals module. merge returns a new sorted list
+  holding the fewest intervals covering exactly the same points: overlapping ones join,
+  and so do ones that merely touch, since half-open [0,10) and [10,20) already describe
+  [0,20). It takes its input in any order, nested and duplicated, must not modify the
+  sequence it was given, and returns an empty list for an empty input. complement returns
+  the parts of window that none of the intervals covers, in ascending order, clipped to
+  the window and ignoring anything wholly outside it; the complement of no intervals is
+  the window itself, an interval spanning the whole window gives an empty list, and two
+  touching intervals leave no gap between them rather than a zero-length one. Nothing
+  already in the package may change.
+
+repo:
+  root: repo/
+  loc: 70
+  entrypoint_hint: src/intervals.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_interval_merge.py]
+  timeout_s: 60
+  n_tests: 14
+
+constraints:
+  allowed_write_globs:
+    - "repo/src/**"
+    - "repo/*.md"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 30
+  max_tool_calls: 60
+
+provenance:
+  source: textbook_pattern
+  license: MIT
+  notes: >
+    Authored for this benchmark; no upstream commit was inverted. Merging a set of
+    intervals and taking their complement inside a window is the arithmetic underneath
+    every calendar free/busy lookup, every coverage report that has to stop counting the
+    same line twice, and the interval trees in `intervaltree` and `portion` on PyPI - the
+    canonical small feature a scheduling utility grows the first time someone asks it a
+    question about gaps rather than about bookings. It is rated easy because the shape is
+    a single sorted sweep and the repository already sorts and validates for you. What
+    keeps it from being trivial is the boundary convention: the sweep has to close on
+    <= rather than <, or two touching bookings report a gap containing no minutes, and
+    the complement has to be taken over the merged intervals rather than the raw ones,
+    or it emits empty spans that the Interval constructor will not even accept.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [intervals, half-open, merge, complement, sweep]

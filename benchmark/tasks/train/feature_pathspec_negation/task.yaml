@@ -1,0 +1,62 @@
+id: feature_pathspec_negation
+category: small_feature
+difficulty: hard
+split: train
+
+instruction: >
+  Our ignore-spec matcher cannot express an exception. Every pattern is an exclusion and
+  the first one that matches ends the search, so there is no way to write "everything
+  under this directory except the one file we do ship", and when a file goes missing
+  from a build nobody can tell which line of the spec swallowed it. Add support for
+  patterns beginning with ! as re-inclusions, with the last matching pattern deciding
+  rather than the first, and an explain(path) that reports which pattern settled the
+  outcome or None if none did. The "Wanted" section of the README states the rules
+  exactly: how ! interacts with the outside-in walk over a path's parent directories,
+  which pattern is credited when an excluded directory takes a whole subtree with it,
+  what an escaped leading ! means, and the exact form explain returns. Everything the
+  README lists under "already does" must keep working unchanged, and is_ignored must
+  keep its signature and its return type.
+
+repo:
+  root: repo/
+  loc: 124
+verification:
+  runner: pytest
+  test_files: [tests/test_pathspec_negation.py]
+  timeout_s: 60
+  n_tests: 14
+
+constraints:
+  allowed_write_globs:
+    - "repo/src/**"
+    - "repo/*.md"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 30
+  max_tool_calls: 60
+
+provenance:
+  source: textbook_pattern
+  license: MIT
+  notes: >
+    Authored for this benchmark; no upstream commit was inverted. Negation with
+    last-match-wins is the exact semantics git's gitignore(5) specifies, and the same
+    ordering rule reappears in Docker's .dockerignore, rsync's filter rules and the
+    `pathspec` package on PyPI - a matcher that starts as "first match excludes" and
+    later grows exceptions is one of the most common shapes of small feature work.
+    It is rated hard because three things interact and each has a plausible wrong
+    answer: the search direction has to be inverted without disturbing the outside-in
+    walk over parent directories; the walk has to stop at an excluded directory, which
+    is what makes a re-inclusion under it powerless and is easy to miss when negation
+    looks like a simple flag; and the deciding rule has to be tracked separately from
+    the boolean, because explain must name the pattern behind a re-inclusion as
+    readily as the one behind an exclusion.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [gitignore, glob, negation, precedence, last-match-wins]

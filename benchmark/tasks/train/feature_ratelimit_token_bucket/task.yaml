@@ -1,0 +1,64 @@
+id: feature_ratelimit_token_bucket
+category: small_feature
+difficulty: medium
+split: train
+
+instruction: >
+  Our fixed-window limiter is wrong at the boundary: a client can spend its whole
+  allowance at the end of one window and its whole allowance at the start of the next,
+  so twice the limit gets through in an instant. It also cannot express what we actually
+  want to sell, which is a slow long-run rate with an occasional burst on top. Add a
+  TokenBucket to the same module, constructed with a capacity, a refill rate in tokens
+  per second and an injected clock like the existing limiter, exposing allow(n=1) that
+  reports whether the request was granted and a read-only tokens giving the current
+  level as a float. The "Wanted" section of the README states the rules it has to follow
+  exactly - the starting level, how a partial refill between two calls is carried, the
+  ceiling, which arguments are rejected, and how a clock that appears to move backwards
+  is treated - and those are requirements, not suggestions. Nothing about
+  FixedWindowLimiter or KeyedLimiter may change: their signatures, their behaviour and
+  their exception types are relied on by the gateway.
+
+repo:
+  root: repo/
+  loc: 86
+  entrypoint_hint: src/limiter.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_token_bucket.py]
+  timeout_s: 60
+  n_tests: 14
+
+constraints:
+  allowed_write_globs:
+    - "repo/src/**"
+    - "repo/*.md"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 30
+  max_tool_calls: 60
+
+provenance:
+  source: textbook_pattern
+  license: MIT
+  notes: >
+    Authored for this benchmark; no upstream commit was inverted. Adding a token bucket
+    beside an existing fixed-window limiter is the ordinary second act of every rate
+    limiter that survives contact with production - the move Envoy, nginx's limit_req,
+    Guava's RateLimiter and the token-bucket strategy in PyPI's `limits` all made, for
+    the same reason: a stepped window is wrong at its own boundary. It is rated medium
+    because the arithmetic is one line and the difficulty is entirely in the bookkeeping
+    around it. The two mistakes an implementation actually makes here are advancing the
+    stored clock reading only when a request is granted, which silently discards every
+    fraction of a token accumulated during a refused call, and advancing it on a clock
+    that has gone backwards, which pays the caller for the jump when it recovers. Both
+    look right on the page; both are pinned by the README and measured separately.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [rate-limiting, token-bucket, injected-clock, lazy-refill]
