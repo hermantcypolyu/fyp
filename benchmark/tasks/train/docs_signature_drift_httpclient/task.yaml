@@ -1,0 +1,63 @@
+id: docs_signature_drift_httpclient
+category: docs_improve
+difficulty: medium
+split: train
+
+instruction: >
+  The reference docs generated from src/httpclient.py describe a client nobody can call.
+  Parameters are listed under names the functions do not take and in an order they are
+  not in, one of them was never a parameter at all, two of the recorded defaults are not
+  the values the code actually falls back to, and the errors section of one method names
+  a type that is not what comes out of it when a request fails. One public callable in
+  that module has no docstring whatsoever, so it is missing from the docs entirely. The
+  code is right and every caller in production depends on it: do not rename a parameter,
+  reorder one, or change a default to make an old sentence true again. Fix the
+  documentation instead, keeping to the docstring convention already used in the module
+  and written down in README.md - one line per real parameter in signature order, the
+  real default recorded where there is one, and every exception a call can really raise
+  named by a type that exists.
+
+repo:
+  root: repo/
+  loc: 184
+  entrypoint_hint: src/httpclient.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_httpclient_docs.py]
+  timeout_s: 60
+  n_tests: 15
+
+constraints:
+  allowed_write_globs:
+    - "repo/src/**"
+    - "repo/*.md"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 25
+  max_tool_calls: 50
+
+provenance:
+  source: textbook_pattern
+  license: MIT
+  notes: >
+    Authored for this benchmark; no upstream commit was inverted. Signature drift is the
+    documentation defect that survives review most easily: renaming a parameter is a
+    one-line diff that no test notices, and the docstring twenty lines above it keeps
+    describing the old name until someone reads the rendered page. requests, urllib3 and
+    httpx have all shipped releases whose docs named a parameter the released signature
+    no longer had. Rated medium rather than easy because there are four distinct kinds of
+    drift here - names, order, defaults, exception types - plus one callable with no
+    docstring at all, and each has to be checked against the code rather than guessed at.
+    The defect is deliberately placed so the cheap fix and the honest fix are edits to
+    the same file: the hidden suite pins the real names, order and defaults so that
+    editing the code to match the prose costs more than it gains.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [docstring-drift, signature, defaults, exceptions, missing-docstring]

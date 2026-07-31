@@ -1,0 +1,62 @@
+id: docs_readme_and_exports_textindex
+category: docs_improve
+difficulty: medium
+split: train
+
+instruction: >
+  The usage examples in README.md do not run any more. Pasting the first session into a
+  shell raises immediately: it calls a method the index does not have, and hands that
+  call a keyword argument nothing accepts. The results the session goes on to print are
+  in a shape search stopped returning a long time ago. The merging session further down
+  has rotted the same way. Separately, `__all__` in src/textindex.py disagrees with the
+  public API the README lists - it names two things that do not exist, so
+  `from src.textindex import *` fails outright. The module is correct and the search box
+  depends on every bit of it: do not rename a method back, do not add an argument back,
+  and do not change what search returns in order to make an old line of the README true.
+  Correct the documentation instead, so each session runs exactly as written and prints
+  exactly what it claims, and bring the export list into agreement with the public
+  surface the README documents. Keep both sessions - they are what people copy.
+
+repo:
+  root: repo/
+  loc: 85
+  entrypoint_hint: README.md
+
+verification:
+  runner: pytest
+  test_files: [tests/test_textindex_docs.py]
+  timeout_s: 60
+  n_tests: 14
+
+constraints:
+  allowed_write_globs:
+    - "repo/*.md"
+    - "repo/src/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 25
+  max_tool_calls: 50
+
+provenance:
+  source: textbook_pattern
+  license: MIT
+  notes: >
+    Authored for this benchmark; no upstream commit was inverted. A README example is
+    the least-tested code a project ships and the most-read: it survives a rename because
+    no import ever resolves it and no CI job ever executes it, and it is usually the
+    first thing a new user runs. An `__all__` that has drifted from the module is the
+    same defect one layer down, and it fails loudly - a star-import raises AttributeError
+    on the dangling name. Rated medium because the fix spans two files and the correct
+    output has to be obtained by running the code rather than guessed from the prose.
+    The cheat here is unusually tempting, because renaming one method and re-shaping one
+    return value would make the stale README true; the hidden suite pins the index's real
+    behaviour so that route costs more tests than it buys.
+
+metadata:
+  expected_files_changed: 2
+  created: 2026-07-31
+  tags: [readme, doctest, exports, dunder-all, api-drift]
