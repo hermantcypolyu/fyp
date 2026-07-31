@@ -1,0 +1,58 @@
+id: bugfix_filesize_unit_rollover
+category: bug_fix
+difficulty: medium
+split: train
+
+instruction: >
+  naturalsize() sometimes reports a size no human would write. A 999999-byte file comes
+  back as "1000.0 kB" instead of "1.0 MB", and the same thing happens just under every
+  other unit boundary, in decimal, binary and GNU modes alike. The cause is that the unit
+  is chosen from the exact byte count while the number in front of it is rounded
+  afterwards, so rounding can push the displayed value up to a full multiple of the base
+  after the unit has already been decided. Fix humanize/filesize.py so that when rounding
+  carries, the result moves up to the next unit. Sizes that round to less than a full
+  multiple of the base must be left exactly as they are, and the largest available unit
+  must still be allowed to show a value above the base.
+
+repo:
+  root: repo/
+  loc: 102
+  entrypoint_hint: humanize/filesize.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_filesize.py]
+  timeout_s: 60
+  n_tests: 14
+
+constraints:
+  allowed_write_globs:
+    - "repo/humanize/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: real_repo
+  origin: https://github.com/python-humanize/humanize @ 823ad6096e1e5ba82ea876ce761fc2efebd76157
+  license: MIT
+  notes: >
+    Upstream commit 823ad6096e1e (2026-06-30), "Fix naturalsize() rounding rollover at
+    unit boundaries (#329)". filesize.py is taken verbatim from that commit's PARENT, so
+    the defect is the one that really shipped; solution/fixed/ is the same file at the
+    commit itself, so the gold patch is the maintainer's actual fix. The assertions come
+    from tests/test_filesize.py at the same commit, regrouped from one large @parametrize
+    into behaviour-sized tests so that partial credit is meaningful. Two reductions were
+    made to fit the size budget: only the filesize module is included, and
+    humanize/i18n.py is replaced by the identity function that gettext resolves to when
+    no locale is active - the import site in filesize.py is untouched.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [rounding, unit-conversion, formatting, real-repo, humanize]

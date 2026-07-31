@@ -1,0 +1,420 @@
+{
+  "https://github.com/jd/tenacity": {
+    "licence": "Apache-2.0",
+    "head": "b3c5a9f9212187aaf96353378daa9a9ebd800742",
+    "candidates": [
+      {
+        "sha": "2318710e4713e2bb967f7bdb4b1c692eb4af61fb",
+        "date": "2016-09-22",
+        "subject": "Fix reraise when no exception",
+        "source_files": [
+          "tenacity/__init__.py"
+        ],
+        "test_files": [
+          "tenacity/tests/test_tenacity.py"
+        ],
+        "source_lines": 2,
+        "test_lines": 13,
+        "score": 90
+      },
+      {
+        "sha": "213446e8f5f73ca0d20e22ec8ee38b1f75a45434",
+        "date": "2026-02-19",
+        "subject": "fix: guard against None seconds_since_start in after_log (#591)",
+        "source_files": [
+          "tenacity/after.py"
+        ],
+        "test_files": [
+          "tests/test_after.py"
+        ],
+        "source_lines": 3,
+        "test_lines": 23,
+        "score": 90
+      },
+      {
+        "sha": "78c8d4bc8596af1143801076faa922f2f21c1bba",
+        "date": "2023-02-06",
+        "subject": "fix: remove __iter__ from AsyncRetring (#387)",
+        "source_files": [
+          "tenacity/_asyncio.py"
+        ],
+        "test_files": [
+          "tests/test_asyncio.py"
+        ],
+        "source_lines": 3,
+        "test_lines": 10,
+        "score": 90
+      },
+      {
+        "sha": "0bdf1d9e5f42b7179e7aae52cb70d26283a4c5ed",
+        "date": "2026-02-17",
+        "subject": "Fix ordinal suffix generation for numbers ending in 11, 12, 13 (#556)",
+        "source_files": [
+          "tenacity/_utils.py"
+        ],
+        "test_files": [
+          "tests/test_utils.py"
+        ],
+        "source_lines": 4,
+        "test_lines": 16,
+        "score": 90
+      },
+      {
+        "sha": "0b1cef0be60b2ab730cacf38d9d456787ad6d6ff",
+        "date": "2023-01-30",
+        "subject": "Fix async loop with retrying code block when result is available (#369)",
+        "source_files": [
+          "tenacity/_asyncio.py"
+        ],
+        "test_files": [
+          "tests/test_asyncio.py"
+        ],
+        "source_lines": 4,
+        "test_lines": 16,
+        "score": 90
+      },
+      {
+        "sha": "d66af82a70dd9af24a7953c6ae5f02d8f198d10f",
+        "date": "2020-10-22",
+        "subject": "Fix a number of issues with pr253 (#258)",
+        "source_files": [
+          "tenacity/__init__.py"
+        ],
+        "test_files": [
+          "tenacity/tests/test_tenacity.py"
+        ],
+        "source_lines": 4,
+        "test_lines": 75,
+        "score": 90
+      },
+      {
+        "sha": "b3c5a9f9212187aaf96353378daa9a9ebd800742",
+        "date": "2026-07-29",
+        "subject": "fix: stop hanging on cyclic exception __cause__ chains (#660)",
+        "source_files": [
+          "tenacity/retry.py"
+        ],
+        "test_files": [
+          "tests/test_tenacity.py"
+        ],
+        "source_lines": 9,
+        "test_lines": 25,
+        "score": 90
+      },
+      {
+        "sha": "db0f9586e02d5235d571dc549b04ff3d5f13de47",
+        "date": "2020-12-15",
+        "subject": "Fix iscoroutinefunction check (for both inspect & asyncio) (#265)",
+        "source_files": [
+          "tenacity/_asyncio.py"
+        ],
+        "test_files": [
+          "tenacity/tests/test_asyncio.py"
+        ],
+        "source_lines": 12,
+        "test_lines": 6,
+        "score": 90
+      },
+      {
+        "sha": "a02b51a20fbda8fcc9051b10bad4a728882a631c",
+        "date": "2026-02-24",
+        "subject": "fix: restore plain function composition with retry_base via | and & (#606)",
+        "source_files": [
+          "tenacity/retry.py"
+        ],
+        "test_files": [
+          "tests/test_tenacity.py"
+        ],
+        "source_lines": 20,
+        "test_lines": 34,
+        "score": 90
+      },
+      {
+        "sha": "e5179bdab9939a748dc3e88ff21309e12e5361e0",
+        "date": "2026-05-22",
+        "subject": "fix: reraise underlying exception when TryAgain wraps a cause (#640)",
+        "source_files": [
+          "tenacity/__init__.py"
+        ],
+        "test_files": [
+          "tests/test_asyncio.py",
+          "tests/test_tenacity.py"
+        ],
+        "source_lines": 8,
+        "test_lines": 60,
+        "score": 80
+      },
+      {
+        "sha": "42b70f90790e1a3203e3dc61ad2648579c3709db",
+        "date": "2026-02-24",
+        "subject": "fix: initialize delay_since_first_attempt in statistics on begin() (#603)",
+        "source_files": [
+          "tenacity/__init__.py"
+        ],
+        "test_files": [
+          "tests/test_tenacity.py"
+        ],
+        "source_lines": 1,
+        "test_lines": 17,
+        "score": 75
+      },
+      {
+        "sha": "c650fb45204635f07910948d5fc59a8c551ffdda",
+        "date": "2026-07-15",
+        "subject": "Fix exponential wait threshold underflow (#656)",
+        "source_files": [
+          "tenacity/wait.py"
+        ],
+        "test_files": [
+          "tests/test_tenacity.py"
+        ],
+        "source_lines": 4,
+        "test_lines": 4,
+        "score": 75
+      }
+    ]
+  },
+  "https://github.com/un33k/python-slugify": {
+    "licence": "MIT",
+    "head": "7b6d5d96c1995e6dccb39a19a13ba78d7d0a3ee4",
+    "candidates": []
+  },
+  "https://github.com/jaraco/inflect": {
+    "licence": "no licence file found - DO NOT USE",
+    "head": "262a247d2d99a47a520cdb2d46adb90df88b4326",
+    "candidates": [
+      {
+        "sha": "31b9339bd7348a5ad6c61091f08320df888e9345",
+        "date": "2021-09-06",
+        "subject": "Don't crash on a suffix-only number_to_words",
+        "source_files": [
+          "inflect.py"
+        ],
+        "test_files": [
+          "tests/test_numwords.py"
+        ],
+        "source_lines": 6,
+        "test_lines": 6,
+        "score": 90
+      },
+      {
+        "sha": "63a7a0ff4bdcd02244fdaf6d8a48b840f48de59c",
+        "date": "2018-10-01",
+        "subject": "Fix pep8 and test coverage",
+        "source_files": [
+          "inflect.py"
+        ],
+        "test_files": [
+          "tests/test_inflections.py",
+          "tests/test_pwd.py"
+        ],
+        "source_lines": 3,
+        "test_lines": 21,
+        "score": 80
+      },
+      {
+        "sha": "312b26dea0f8c1e78c3cc2b0f6ea01f15878285f",
+        "date": "2021-09-17",
+        "subject": "Fix typos found by codespell",
+        "source_files": [
+          "inflect.py"
+        ],
+        "test_files": [
+          "tests/test_an.py",
+          "tests/test_pwd.py"
+        ],
+        "source_lines": 8,
+        "test_lines": 6,
+        "score": 80
+      },
+      {
+        "sha": "f87c0b9e76ad97d564a8fd3a3b2e75e765e193f5",
+        "date": "2018-09-27",
+        "subject": "Fix plural of 'pound-force'",
+        "source_files": [
+          "inflect.py"
+        ],
+        "test_files": [
+          "tests/test_compounds.py"
+        ],
+        "source_lines": 12,
+        "test_lines": 2,
+        "score": 75
+      }
+    ]
+  },
+  "https://github.com/lepture/mistune": {
+    "licence": "BSD",
+    "head": "75cab785a339eadfa7e760ed7ab2b0a3ad98c642",
+    "candidates": [
+      {
+        "sha": "0d6f3d850283d51e9c60e5a1b3c9343a18df3722",
+        "date": "2026-04-13",
+        "subject": "fix: remove double-encoding of image alt text",
+        "source_files": [
+          "src/mistune/renderers/html.py"
+        ],
+        "test_files": [
+          "tests/test_misc.py"
+        ],
+        "source_lines": 2,
+        "test_lines": 13,
+        "score": 90
+      },
+      {
+        "sha": "bb3374d0fa6925d6d828e093de783f51d4de3376",
+        "date": "2024-03-30",
+        "subject": "fix list parsing edge case",
+        "source_files": [
+          "src/mistune/block_parser.py"
+        ],
+        "test_files": [
+          "tests/test_misc.py"
+        ],
+        "source_lines": 2,
+        "test_lines": 6,
+        "score": 90
+      },
+      {
+        "sha": "eb32fe5e9c99dc15ebfd15a69f82c73f3c96c111",
+        "date": "2021-02-16",
+        "subject": "Fix harmful link",
+        "source_files": [
+          "mistune/renderers.py"
+        ],
+        "test_files": [
+          "tests/test_misc.py"
+        ],
+        "source_lines": 2,
+        "test_lines": 5,
+        "score": 90
+      },
+      {
+        "sha": "f7b5239ab73d576f55041bc87b40c46dcc4707fb",
+        "date": "2017-01-14",
+        "subject": "Fix HTML attribute regex",
+        "source_files": [
+          "mistune.py"
+        ],
+        "test_files": [
+          "tests/test_extra.py"
+        ],
+        "source_lines": 2,
+        "test_lines": 22,
+        "score": 90
+      },
+      {
+        "sha": "e12f0d38d028a297ffd6c8bec9b5480627fe1903",
+        "date": "2026-07-18",
+        "subject": "fix: keep escaped backslashes in angle-bracket link destinations",
+        "source_files": [
+          "src/mistune/helpers.py"
+        ],
+        "test_files": [
+          "tests/test_misc.py"
+        ],
+        "source_lines": 5,
+        "test_lines": 8,
+        "score": 90
+      },
+      {
+        "sha": "2c128b7e9ae1dd0119223ceef3346d331bd33ff6",
+        "date": "2019-12-02",
+        "subject": "Fix include directive",
+        "source_files": [
+          "mistune/plugins/directive.py"
+        ],
+        "test_files": [
+          "tests/test_directive.py"
+        ],
+        "source_lines": 5,
+        "test_lines": 29,
+        "score": 90
+      },
+      {
+        "sha": "e3e51de9cf0a72dc30191248dccf22087c57f046",
+        "date": "2026-06-21",
+        "subject": "fix(image): validate figure width option",
+        "source_files": [
+          "src/mistune/directives/image.py"
+        ],
+        "test_files": [
+          "tests/test_security_image.py"
+        ],
+        "source_lines": 8,
+        "test_lines": 36,
+        "score": 90
+      },
+      {
+        "sha": "2f2449dd0ab1976c98f4441f973c0a7f3d6f5ee4",
+        "date": "2026-06-21",
+        "subject": "fix(cli): add entrypoint and utf-8 output",
+        "source_files": [
+          "src/mistune/__main__.py"
+        ],
+        "test_files": [
+          "tests/test_misc.py"
+        ],
+        "source_lines": 9,
+        "test_lines": 18,
+        "score": 90
+      },
+      {
+        "sha": "1209f3421e5057bb2525c7059c1a38ddf205ef2e",
+        "date": "2026-07-25",
+        "subject": "fix: apply escape flag to a user-supplied HTML renderer",
+        "source_files": [
+          "src/mistune/__init__.py"
+        ],
+        "test_files": [
+          "tests/test_misc.py"
+        ],
+        "source_lines": 10,
+        "test_lines": 14,
+        "score": 90
+      },
+      {
+        "sha": "b042996659275aa9719d6efa37163bea62b34cd5",
+        "date": "2026-07-03",
+        "subject": "fix: escape literal emphasis markers in MarkdownRenderer",
+        "source_files": [
+          "src/mistune/renderers/markdown.py"
+        ],
+        "test_files": [
+          "tests/test_renderers.py"
+        ],
+        "source_lines": 11,
+        "test_lines": 29,
+        "score": 90
+      },
+      {
+        "sha": "f6827e82fb0bd032fd3cc917140282885bcf6184",
+        "date": "2026-06-17",
+        "subject": "Fix MarkdownRenderer re-rendering of code spans containing backticks",
+        "source_files": [
+          "src/mistune/renderers/markdown.py"
+        ],
+        "test_files": [
+          "tests/test_renderers.py"
+        ],
+        "source_lines": 12,
+        "test_lines": 12,
+        "score": 90
+      },
+      {
+        "sha": "c7101fcbb6e8790e8e39157c5ca2238fc6dd6cbc",
+        "date": "2026-06-21",
+        "subject": "fix(renderer): block encoded unsafe URL schemes",
+        "source_files": [
+          "src/mistune/renderers/html.py"
+        ],
+        "test_files": [
+          "tests/test_security_urls.py"
+        ],
+        "source_lines": 20,
+        "test_lines": 20,
+        "score": 90
+      }
+    ]
+  }
+}
