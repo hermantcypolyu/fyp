@@ -31,7 +31,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from jsonschema import Draft202012Validator  # noqa: E402
 
-from benchmark.tools.globs import path_matches_any  # noqa: E402
+from benchmark.tools.globs import normalise, path_matches_any  # noqa: E402
 from benchmark.tools.patch_utils import PatchError, patched_files  # noqa: E402
 from benchmark.tools.task_loader import (  # noqa: E402
     SPLITS,
@@ -312,9 +312,18 @@ def check_gold_patch(task: Task, report: Report) -> None:
 
 
 def check_leakage(task: Task, report: Report) -> None:
-    """The instruction must not name the hidden tests (5.4 rule 4)."""
+    """The instruction must not name the hidden tests (5.4 rule 4).
+
+    Two directories are called `tests/` and only one of them is secret, so this check has to
+    tell them apart rather than flag the word. See "The two test directories" in
+    docs/task_authoring_guide.md: `<task>/tests/` is the hidden grading suite and may never be
+    mentioned; `<task>/repo/tests/` is the project's own suite, which the agent can read and
+    which a `test_update` task exists to make it edit. A mention that resolves to a real file
+    under `repo/` is therefore normal prose, not a leak.
+    """
     instruction = str(task.data.get("instruction", ""))
     lowered = instruction.lower()
+
     for rel in task.test_files:
         name = Path(rel).name
         if name.lower() in lowered or rel.lower() in lowered:
@@ -324,13 +333,27 @@ def check_leakage(task: Task, report: Report) -> None:
                 f"instruction names the hidden test file '{name}'",
                 "Describe the symptom, not the test. The agent must never learn the hidden suite's shape.",
             )
-    if "tests/" in lowered:
+
+    for mention in _TESTS_PATH_MENTION.findall(instruction):
+        if _resolves_inside_the_repo(task, mention):
+            continue
         report.warn(
             "LEAK_TESTDIR",
             task.id,
-            "instruction mentions 'tests/'",
-            "Make sure this refers to visible smoke tests, not the hidden suite.",
+            f"instruction mentions '{mention}', which is not a path inside repo/",
+            "If this means the hidden suite, remove it. If it means a file the agent can see, "
+            "write the path exactly as the agent would (relative to the repo root).",
         )
+
+
+#: Path-shaped tokens in prose that name a `tests/` or `test/` directory.
+_TESTS_PATH_MENTION = re.compile(r"[A-Za-z0-9_.\-]*\btests?[/\\][A-Za-z0-9_./\\-]*")
+
+
+def _resolves_inside_the_repo(task: Task, mention: str) -> bool:
+    """True if `mention` names something that really exists under `repo/`."""
+    rel = normalise(mention).strip("/").removeprefix("repo/").rstrip(".,;:")
+    return bool(rel) and (task.repo_dir / rel).exists()
 
 
 def check_smoke(task: Task, report: Report) -> None:

@@ -45,7 +45,99 @@ testupdate_money_api_v2                test_update    medium  4/10 passed  10/10
 
 ---
 
-## 2. The procedure
+## 2. The two test directories
+
+Every task has two directories called `tests`. Only one of them is secret. Getting this
+straight is the single most load-bearing idea in the format, and it is what makes the
+`test_update` category possible at all.
+
+| | `<task>/tests/` | `<task>/repo/tests/` |
+| --- | --- | --- |
+| what it is | the **hidden grading suite** | the **project's own suite**, ordinary source |
+| who wrote it | you, the task author | the fictional (or real) project |
+| decides the reward | yes - `reward_v1` is its pass fraction | no |
+| agent can read it | **never** | yes |
+| agent can write it | **never** | only if `allowed_write_globs` says so |
+| exists in every task | yes, mandatory | only where the task needs one |
+
+### What the agent's world actually looks like
+
+`materialise()` builds a disposable copy of the task, and the agent works inside it with
+`repo/` as its working directory:
+
+```
+work/
+├── repo/          <- the agent's cwd and PYTHONPATH. Everything it can see.
+│   ├── src/
+│   └── tests/     <- the project's own suite, if the task has one. Visible. Editable.
+├── smoke/         <- what run_tests() executes for the agent
+└── tests/         <- THE HIDDEN SUITE - and only when grading
+```
+
+When the sandbox is built for the agent it is built with `include_tests=False`, so that last
+directory is **never written to disk inside the agent's world**. Isolation does not depend on
+file permissions, on the agent being well behaved, or on a glob being spelled correctly: the
+bytes are simply not there. The hidden suite is materialised only in the grading copy, which
+the agent never touches.
+
+### Four independent mechanisms, deliberately
+
+Any one of these would mostly work. They are stacked because "mostly" is not good enough for
+the quantity that defines the reward.
+
+1. **Absence.** `materialise(..., include_tests=False)` - the agent's copy has no hidden
+   suite in it. This is the real guarantee; the rest are belt and braces.
+2. **The deny-list.** `tests/**` and `solution/**` are mandatory in every
+   `forbidden_write_globs`, and B4 turns a match into the `tests_modified` hard-zero gate.
+   The matcher is `benchmark/tools/globs.py`, not `fnmatch`, because `fnmatch` treats `/` as
+   an ordinary character and would quietly widen every task's permissions.
+   `benchmark/tests/test_globs.py` pins down that `tests/**` matches
+   `tests/test_money_suite.py` and does **not** match `repo/tests/test_money.py`.
+3. **The grading path.** `run_tests()` is given the hidden files by absolute path and runs
+   under a generated pytest ini, so no `conftest.py`, `pytest.ini` or `pyproject.toml` inside
+   `repo/` can influence collection, add plugins, or monkeypatch its way into the run.
+4. **The instruction check.** `check_leakage` refuses an instruction that names a hidden test
+   file (`LEAK_TESTNAME`, an error) and warns about a `tests/` path that does not resolve to
+   something real under `repo/` (`LEAK_TESTDIR`). It resolves the path rather than matching
+   the word, so an honest `test_update` instruction is silent - see
+   `benchmark/tests/test_leakage.py`.
+
+### What this means when you write a `test_update` task
+
+The agent is asked to edit `repo/tests/`, which is why that path - and only that path - goes
+in `allowed_write_globs`:
+
+```yaml
+constraints:
+  allowed_write_globs:
+    - "repo/tests/**"        # the project's own suite: the thing to be updated
+  forbidden_write_globs:
+    - "tests/**"             # the hidden grading suite: mandatory, always
+    - "solution/**"
+    - "repo/src/**"          # the library is CORRECT; updating the tests is the task
+```
+
+Write paths in the instruction exactly as the agent would type them - relative to `repo/`,
+so `tests/test_money.py`, not `repo/tests/test_money.py`. That is what the agent's `cwd` is,
+and it is what `check_leakage` resolves against.
+
+The hidden suite for such a task cannot simply re-run the project's suite and report pass or
+fail; that would collapse the reward to one bit and make deleting every test the shortest
+winning move. `testupdate_money_api_v2` shows the shape that works: run the project's suite in
+a subprocess, count the surviving tests from the JUnit XML, check the updated source still
+mentions the renamed entry points, and **separately re-assert the library's own contract** so
+that "fixing" the tests by reverting the library fails.
+
+### The mistake to avoid
+
+Do not give a hidden test file the same name as a visible one. `tests/test_money.py` and
+`repo/tests/test_money.py` will both work, and then someone reading a traceback will lose an
+hour. Name hidden suites for what they verify - `test_money_suite.py`, `test_packaging.py` -
+and keep them distinct from anything under `repo/`.
+
+---
+
+## 3. The procedure
 
 ### Step 0 — pick a slot
 
@@ -189,7 +281,7 @@ make catalogue
 
 ---
 
-## 3. `task.yaml` field by field
+## 4. `task.yaml` field by field
 
 ```yaml
 id: bugfix_offbyone_pagination      # snake_case; must equal the directory name
@@ -246,9 +338,9 @@ tests pass. Two consequences:
   `config_fix` task that allows `repo/**` lets the agent "fix" the config by rewriting the
   library, which is not the skill being measured.
 
-Note the distinction that `test_update` tasks depend on: `tests/**` is the **hidden**
-grading suite; `repo/tests/**` is the project's **own visible** suite, one level down, and
-is exactly what a `test_update` task asks the agent to edit. They never collide.
+Remember that `tests/**` and `repo/tests/**` are different places, and that a `test_update`
+task needs the second one allowed while the first stays forbidden. Section 2 has the full
+picture.
 
 ### Difficulty rubric
 
@@ -276,7 +368,7 @@ permits redistribution — the code is going into this repository.
 
 ---
 
-## 4. Category notes
+## 5. Category notes
 
 **`bug_fix`** — the reference shape. See `bugfix_offbyone_pagination`.
 
@@ -307,7 +399,7 @@ quality; you cannot do it deterministically.
 
 ---
 
-## 5. Checklist
+## 6. Checklist
 
 Before you commit a task:
 

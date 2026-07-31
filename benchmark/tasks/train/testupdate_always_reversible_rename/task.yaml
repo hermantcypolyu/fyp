@@ -1,0 +1,73 @@
+id: testupdate_always_reversible_rename
+category: test_update
+difficulty: medium
+split: train
+
+instruction: >
+  One of the helpers in more_itertools/more.py was renamed in the last release. It is the
+  one that reverses any iterable, including the ones the built-in reversed() refuses because
+  they are not sequences; its old name described how it related to that built-in rather than
+  what it does, so it was renamed to say what it does. No alias was kept, which is
+  deliberate - do not add the old name back. The release also simplified how the helper
+  buffers a non-reversible input, which does not change the values it yields but does change
+  the exact iterator type it hands back in that case. The project's own suite at
+  tests/test_more.py is stale on both counts and now fails. Bring it up to date, keeping the
+  same breadth of coverage: both of the cases the old tests covered must still be covered,
+  including the one where the input is not something the built-in can reverse, and the
+  assertion that distinguishes the two paths by iterator type must still distinguish them.
+
+repo:
+  root: repo/
+  loc: 346
+  entrypoint_hint: tests/test_more.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_more_suite.py]
+  timeout_s: 180
+  n_tests: 10
+
+constraints:
+  allowed_write_globs:
+    - "repo/tests/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+    - "repo/more_itertools/**"
+  max_turns: 25
+  max_tool_calls: 50
+
+provenance:
+  source: real_repo
+  origin: https://github.com/more-itertools/more-itertools @ ae64785a58bf0fc1dd76abf51458fa2361cad057
+  license: MIT
+  notes: >
+    Upstream commit ae64785a58bf (2018-01-02), "Rename to always_reversible". The direction
+    of extraction is reversed from a bug-fix task and that is the point: more.py is taken
+    from the COMMIT, so the library is correct, and the project's suite is taken from its
+    PARENT, so the stale suite is the one that really existed. The reference solution is
+    exactly what the maintainer committed to the suite: the rename of the class, its
+    docstring and every call site, plus re-basing one assertion on a tuple - the same commit
+    switched the internal buffer from a deque to a list, which made a generator reverse to
+    the same iterator class as a list and so broke an assertion that the two differ. That
+    second half is what makes this more than a find-and-replace. Reductions to fit the size
+    budget and to run on Python 3.12: more.py is trimmed from 1477 lines to
+    always_reversible plus five neighbouring helpers with benchmark/tools/trim_module.py, so
+    the kept code is byte-identical to upstream apart from three edits confined to import
+    lines - `Sequence` is imported from collections.abc, which Python 3.10 requires; the two
+    `six` imports are replaced by the Python 3 meanings of the two names the kept code
+    actually uses (six.moves' filter, map, range and zip already ARE the builtins on Python
+    3); and the `.recipes` import is dropped because the trim removed its only users and
+    that module is not carried. The visible suite carries upstream's test classes verbatim
+    for the retained helpers, minus the classes whose helpers were trimmed away. repo/ comes
+    to 346 lines, over the 300 the validator prefers and well under the 500 ceiling: a
+    test_update repo has to carry both a library and a suite worth updating, and cutting
+    either to reach 300 would make the task trivial.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-01
+  tags: [api-migration, test-maintenance, rename, real-repo, more-itertools]

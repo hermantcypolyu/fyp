@@ -1,0 +1,71 @@
+id: testupdate_funcy_omit_rename
+category: test_update
+difficulty: medium
+split: train
+
+instruction: >
+  One of the dictionary helpers in funcy/colls.py was renamed in the last release. The
+  helper that returns a copy of a mapping with some keys left out used to have a name that
+  read as if it threw an exception, which caused enough confusion that it was renamed to
+  say what it does; the behaviour is unchanged. The rename is deliberate and the library is
+  correct - do not add the old name back. What is stale is the project's own suite at
+  tests/test_colls.py, which still calls the old name and now fails. Bring that suite up to
+  date, keeping the same breadth of coverage: every behaviour that was checked before must
+  still be checked afterwards, including that the helper preserves the type of the
+  collection it is given rather than always returning a plain dict.
+
+repo:
+  root: repo/
+  loc: 376
+  entrypoint_hint: tests/test_colls.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_colls_suite.py]
+  timeout_s: 180
+  n_tests: 10
+
+constraints:
+  allowed_write_globs:
+    - "repo/tests/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+    - "repo/funcy/**"
+  max_turns: 25
+  max_tool_calls: 50
+
+provenance:
+  source: real_repo
+  origin: https://github.com/Suor/funcy @ a4c0a262419788a550cb854c0f5e5ee1dedf1604
+  license: BSD-3-Clause
+  notes: >
+    Upstream commit a4c0a2624197 (2017-08-21), "Rename throw() to omit()". The direction of
+    extraction is reversed from a bug-fix task and that is the point: funcy/colls.py is
+    taken from the COMMIT, so the library is correct, and the project's suite is taken from
+    its PARENT, so the stale suite is the one that really existed. The reference solution is
+    the same suite with the rename applied, which is what the maintainer committed.
+    Reductions to fit the size budget and to run on Python 3.12, all of which the other
+    funcy task in this corpus shares: colls.py is trimmed to the dict-utility family with
+    benchmark/tools/trim_module.py so the kept code is byte-identical to upstream apart from
+    one compatibility edit - this 2017 snapshot does `from collections import Mapping, Set,
+    Iterable, Iterator`, which Python 3.10 removed, so that import is split to
+    collections.abc; funcy/seqs.py, funcy/funcs.py and funcy/funcmakers.py are replaced by
+    small shims providing only the names colls.py imports, because the real ones pull in
+    funcy.strings, funcy.types and funcy._inspect; funcy/cross.py and funcy/primitives.py
+    are upstream's, untrimmed; and `__all__` is dropped from colls.py because it would
+    otherwise name helpers the trim removed. The visible suite carries upstream's assertions
+    for the retained helpers, with two adaptations forced by the reduction: upstream's
+    `from whatever import _` placeholders become plain lambdas, and the regex-predicate
+    cases are dropped along with the funcmakers branch that implements them. repo/ comes to
+    376 lines, over the 300 the validator prefers and well under the 500 ceiling: a
+    test_update repo has to carry both a library and a suite worth updating, and cutting
+    either to reach 300 would make the task trivial.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-01
+  tags: [api-migration, test-maintenance, rename, real-repo, funcy]

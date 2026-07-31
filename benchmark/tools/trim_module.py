@@ -88,6 +88,15 @@ def _names_bound(node: ast.stmt) -> set[str]:
         return {t.id for t in node.targets if isinstance(t, ast.Name)}
     if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
         return {node.target.id}
+    # A module-level `if PY2: ... else: ...` or `try: ... except ImportError: ...` defines
+    # real names, and keeping such a block is all-or-nothing: you cannot take one branch
+    # without changing what the module does on some interpreter. Report every name any
+    # branch binds, so `--keep <name>` retains the whole construct.
+    if isinstance(node, (ast.If, ast.Try)):
+        branches = [*node.body, *node.orelse]
+        if isinstance(node, ast.Try):
+            branches += [*node.finalbody, *(s for h in node.handlers for s in h.body)]
+        return set().union(*(_names_bound(s) for s in branches)) if branches else set()
     return set()
 
 
