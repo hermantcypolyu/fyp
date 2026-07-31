@@ -1,0 +1,53 @@
+id: bugfix_offbyone_pagination
+category: bug_fix
+difficulty: easy
+split: train
+
+instruction: >
+  Users report that the last few records in a long list are unreachable: paging to the
+  end of a collection whose size is not an exact multiple of the page size silently
+  drops the final partial page, and the "next page" control disappears one page too
+  early. An empty collection also reports zero pages, which the UI renders as
+  "page 1 of 0". Fix the pagination logic in src/pagination.py so that a trailing
+  partial page counts as a real page, and so that an empty collection reports exactly
+  one page. Do not change the public function signatures.
+
+repo:
+  root: repo/
+  loc: 96
+  entrypoint_hint: src/pagination.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_pagination.py]
+  timeout_s: 60
+  n_tests: 11
+
+constraints:
+  allowed_write_globs:
+    - "repo/src/**"
+    - "repo/*.py"
+    - "repo/*.md"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: textbook_pattern
+  license: MIT
+  notes: >
+    Integer-division ceiling error - the single most common pagination bug, and the
+    worked example given in AGENT_BUILD_SPEC 5.1. Authored for this benchmark as the
+    reference bug_fix task; the surrounding query/record-store code is original.
+    Marked textbook_pattern rather than real_repo because no specific upstream commit
+    was inverted.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [off-by-one, integer-division, pagination]

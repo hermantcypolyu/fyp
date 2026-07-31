@@ -26,7 +26,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -141,7 +141,7 @@ def main() -> int:
     from starlette.testclient import TestClient
 
     report: dict[str, Any] = {
-        "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "checked_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "gym_path": str(gym_path),
         "gym_commit": _git_head(gym_path),
         "python": sys.version.split()[0],

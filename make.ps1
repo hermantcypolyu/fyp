@@ -11,8 +11,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'install', 'validate', 'verify-gold', 'catalogue', 'smoke',
-        'smoke-gym', 'test', 'lint', 'fmt', 'check', 'freshclone', 'clean')]
+    [ValidateSet('help', 'install', 'new-task', 'gold-patches', 'validate', 'verify-gold',
+        'catalogue', 'smoke', 'smoke-gym', 'test', 'lint', 'fmt', 'check', 'freshclone', 'clean')]
     [string]$Target = 'help',
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -41,6 +41,8 @@ switch ($Target) {
         Write-Host "rl-coding-agents targets:" -ForegroundColor Green
         @(
             @('install', 'Create the venv and install everything (core + dev)'),
+            @('new-task', 'Scaffold a blank task: ./make.ps1 new-task my_id --category bug_fix'),
+            @('gold-patches', 'Regenerate every solution/gold.patch from solution/fixed/'),
             @('validate', 'Schema-validate every task in benchmark/tasks/**'),
             @('verify-gold', 'Prove every gold patch fixes its task; untouched repo fails'),
             @('catalogue', 'Regenerate benchmark/catalogue.md'),
@@ -55,6 +57,8 @@ switch ($Target) {
         ) | ForEach-Object { "  {0,-12} {1}" -f $_[0], $_[1] }
     }
     'install' { Invoke-Step 'uv sync' { & $uv sync --extra dev } }
+    'new-task' { Invoke-Step 'scaffold task' { & $uv run python benchmark/tools/new_task.py @Rest } }
+    'gold-patches' { Invoke-Step 'build gold patches' { & $uv run python benchmark/tools/make_gold_patch.py --all @Rest } }
     'validate' { Invoke-Step 'validate tasks' { & $uv run python benchmark/schema/validate_tasks.py --all @Rest } }
     'verify-gold' { Invoke-Step 'verify gold patches' { & $uv run python scripts/verify_gold_patches.py --split all @Rest } }
     'catalogue' { Invoke-Step 'build catalogue' { & $uv run python benchmark/tools/build_catalogue.py @Rest } }

@@ -22,7 +22,7 @@ import platform
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -132,7 +132,7 @@ def probe_memory_gib() -> float | str:
 def collect() -> dict[str, Any]:
     total, used, free = shutil.disk_usage(Path.cwd().anchor or "/")
     return {
-        "captured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "captured_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "hostname_hash": f"{abs(hash(platform.node())) % 10**8:08d}",  # stable, not identifying
         "os": f"{platform.system()} {platform.release()} ({platform.version()})",
         "machine": platform.machine(),

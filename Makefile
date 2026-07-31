@@ -9,13 +9,19 @@ UV ?= uv
 PY := $(UV) run python
 
 .DEFAULT_GOAL := help
-.PHONY: help install validate verify-gold catalogue smoke smoke-gym test lint fmt check clean freshclone
+.PHONY: help install new-task gold-patches validate verify-gold catalogue smoke smoke-gym test lint fmt check clean freshclone
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 install: ## Create the venv and install everything (core + dev)
 	$(UV) sync --extra dev
+
+new-task: ## Scaffold a blank task: make new-task ID=my_task CATEGORY=bug_fix
+	$(PY) benchmark/tools/new_task.py $(ID) --category $(CATEGORY) $(if $(SPLIT),--split $(SPLIT),) $(if $(DIFFICULTY),--difficulty $(DIFFICULTY),)
+
+gold-patches: ## Regenerate solution/gold.patch for every task from solution/fixed/
+	$(PY) benchmark/tools/make_gold_patch.py --all
 
 validate: ## Schema-validate every task in benchmark/tasks/**
 	$(PY) benchmark/schema/validate_tasks.py --all

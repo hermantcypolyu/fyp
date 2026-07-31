@@ -1,0 +1,8 @@
+# Line endings are normalised to LF in the repository so that a fresh clone on Windows,
+# Linux or macOS produces byte-identical task content. The gold patches in particular
+# must not be rewritten on checkout: a patch generated from LF sources and checked out
+# with CRLF is a classic source of "context not found" failures.
+* text=auto eol=lf
+*.patch -text
+*.png binary
+*.jpg binary

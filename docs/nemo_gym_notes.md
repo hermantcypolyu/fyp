@@ -64,10 +64,10 @@ Verbatim shape, from `resources_servers/example_session_state_mgmt/app.py`:
 ```python
 class StatefulCounterResourcesServer(SimpleResourcesServer):
     config: StatefulCounterResourcesServerConfig
-    session_id_to_counter: Dict[str, int] = Field(default_factory=dict)   # per-rollout state
+    session_id_to_counter: Dict[str, int] = Field(default_factory=dict)  # per-rollout state
 
     def setup_webserver(self) -> FastAPI:
-        app = super().setup_webserver()          # <- keeps /seed_session, /verify, sessions
+        app = super().setup_webserver()  # <- keeps /seed_session, /verify, sessions
         app.post("/increment_counter")(self.increment_counter)
         app.post("/get_counter_value")(self.get_counter_value)
         return app
@@ -88,8 +88,9 @@ Three things worth internalising:
 ```python
 from nemo_gym.server_utils import SESSION_ID_KEY
 
+
 async def increment_counter(self, request: Request, body: IncrementCounterRequest):
-    session_id = request.session[SESSION_ID_KEY]        # unique per rollout
+    session_id = request.session[SESSION_ID_KEY]  # unique per rollout
     ...
 ```
 
@@ -113,13 +114,15 @@ is how our `task_id` will reach sandbox creation without inventing a side channe
 
 ```python
 class BaseRunRequest(BaseModel):
-    responses_create_params: NeMoGymResponseCreateParamsNonStreaming   # line 88
+    responses_create_params: NeMoGymResponseCreateParamsNonStreaming  # line 88
+
 
 class BaseVerifyRequest(BaseRunRequest):
-    response: NeMoGymResponse                                          # line 92, the full trace
+    response: NeMoGymResponse  # line 92, the full trace
+
 
 class BaseVerifyResponse(BaseVerifyRequest):
-    reward: float                                                      # line 96
+    reward: float  # line 96
 ```
 
 The response **echoes the request and adds `reward`** — that is why every example ends with

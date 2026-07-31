@@ -1,0 +1,59 @@
+id: configfix_textkit_packaging
+category: config_fix
+difficulty: hard
+split: train
+
+instruction: >
+  The textkit package cannot be imported and its release job refuses to publish. The
+  Python logic in textkit/slug.py and textkit/case.py is correct and should not be
+  touched - every fault is in packaging metadata or in the package's own re-export
+  surface. Reported symptoms, in the order users hit them: `import textkit` raises
+  ModuleNotFoundError; the name listed for the title-casing helper does not match the
+  function the module actually defines; the release job reports that the declared
+  distribution version disagrees with textkit.__version__; installs on Python 3.8 and 3.9
+  are accepted by pip and then crash at import; and the built wheel is empty. README.md
+  documents the intended layout, the supported-Python floor and the release checklist.
+  Make the metadata describe the package that actually exists.
+
+repo:
+  root: repo/
+  loc: 75
+  entrypoint_hint: pyproject.toml
+
+verification:
+  runner: pytest
+  test_files: [tests/test_packaging.py]
+  timeout_s: 60
+  n_tests: 9
+
+constraints:
+  allowed_write_globs:
+    - "repo/pyproject.toml"
+    - "repo/textkit/__init__.py"
+    - "repo/*.md"
+    - "repo/*.cfg"
+    - "repo/*.toml"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 25
+  max_tool_calls: 50
+
+provenance:
+  source: textbook_pattern
+  license: MIT
+  notes: >
+    Five packaging faults that occur together in practice whenever a project is renamed
+    or moved between flat and src layouts: a stale relative import, an __all__ entry that
+    drifted from the function name, a version declared in two places, a requires-python
+    floor that was never raised after the code adopted newer syntax, and a wheel
+    packages path pointing at a directory that no longer exists. Authored for this
+    benchmark as the reference config_fix task; no specific upstream commit was inverted.
+
+metadata:
+  expected_files_changed: 2
+  created: 2026-07-31
+  tags: [packaging, pyproject, imports, versioning, requires-python]

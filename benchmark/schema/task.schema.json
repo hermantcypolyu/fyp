@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rl-coding-agents/benchmark/schema/task.schema.json",
+  "title": "Coding benchmark task",
+  "description": "Contract for benchmark/tasks/{split}/{task_id}/task.yaml. Defined by AGENT_BUILD_SPEC.md 5.1. Changing this file changes a contract - bump the version and say why in docs/decisions/.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "category",
+    "difficulty",
+    "split",
+    "instruction",
+    "repo",
+    "verification",
+    "constraints",
+    "provenance",
+    "metadata"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$",
+      "minLength": 6,
+      "maxLength": 60,
+      "description": "snake_case, unique, and stable forever - it ends up in result files, so renaming one breaks historical comparisons. Must equal the task directory name."
+    },
+    "category": {
+      "enum": ["bug_fix", "test_update", "config_fix", "small_feature", "docs_improve"],
+      "description": "Drives the category mix in 5.2. Do not invent new values without an ADR."
+    },
+    "difficulty": {
+      "enum": ["easy", "medium", "hard"],
+      "description": "easy = one file, obvious fix. medium = must run tests to localise. hard = multi-file, or the first plausible fix breaks something else."
+    },
+    "split": {
+      "enum": ["train", "heldout"],
+      "description": "Must match the parent directory. heldout is sealed once authored - see 5.4 rule 8."
+    },
+    "instruction": {
+      "type": "string",
+      "minLength": 30,
+      "maxLength": 1200,
+      "description": "What the agent is told. Describe the symptom, never the fix. Must not name a file under verification.test_files."
+    },
+    "repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "loc"],
+      "properties": {
+        "root": {
+          "const": "repo/",
+          "description": "Fixed by the sandbox layout. Present so the contract is explicit in every task file."
+        },
+        "loc": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Non-blank, non-comment lines of Python under repo/. Capped at 500 by 5.4 rule 6 - this is a tool-use study, not a long-context study. Verified against a real count."
+        },
+        "entrypoint_hint": {
+          "type": "string",
+          "pattern": "^[^/].*[^/]$",
+          "description": "Repo-relative path nudging the agent at the right file. Omit for hard tasks - localisation IS the task there."
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runner", "test_files", "timeout_s", "n_tests"],
+      "properties": {
+        "runner": {
+          "enum": ["pytest"],
+          "description": "Only pytest for now. A second runner needs an ADR and a verifier change."
+        },
+        "test_files": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^tests/[A-Za-z0-9_./-]+\\.py$"
+          },
+          "description": "HIDDEN tests, task-dir-relative. Never mounted into the sandbox, never named in the instruction."
+        },
+        "timeout_s": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 300,
+          "description": "Wall-clock cap for the hidden suite. Keep small: this multiplies by 40 tasks x k samples on every eval."
+        },
+        "n_tests": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 40,
+          "description": "Real collected test count - validate_tasks.py enforces it against pytest --collect-only. At least 3 so partial credit is real (5.4 rule 5); reward_v1 is a fraction of this."
+        }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed_write_globs", "forbidden_write_globs", "max_turns", "max_tool_calls"],
+      "properties": {
+        "allowed_write_globs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^repo/" },
+          "description": "Allow-list for write_file/edit_file. Must stay inside repo/ - anything else is a sandbox escape by definition."
+        },
+        "forbidden_write_globs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string" },
+          "description": "Checked first and wins over the allow-list. Must include tests/** and solution/** - these are the reward-hacking surfaces from 5.7."
+        },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 60,
+          "description": "Model turns before the episode is cut. Also a VRAM lever - see docs/vram_notes.md 3.2."
+        },
+        "max_tool_calls": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 120,
+          "description": "Total tool invocations before the episode is cut. Should exceed max_turns, since one turn may emit several calls."
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "license"],
+      "properties": {
+        "source": {
+          "enum": ["real_repo", "textbook_pattern", "authored"],
+          "description": "5.3 targets >=50% real_repo. Never label an invented bug as real_repo - that is an explicit never in 9.1."
+        },
+        "origin": {
+          "type": "string",
+          "minLength": 5,
+          "description": "Required when source=real_repo. Format: 'github.com/<org>/<repo> @ <commit-or-tag>'."
+        },
+        "license": {
+          "type": "string",
+          "minLength": 2,
+          "description": "Licence of the origin code, or of ours if authored. Permissive only - MIT / BSD / Apache-2.0 / PSF-2.0 / CC0-1.0."
+        },
+        "notes": {
+          "type": "string",
+          "description": "How the task was derived. For real_repo, say exactly what was inverted or removed."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "source": { "const": "real_repo" } }, "required": ["source"] },
+          "then": { "required": ["origin", "notes"] }
+        }
+      ]
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected_files_changed", "created"],
+      "properties": {
+        "expected_files_changed": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6,
+          "description": "How many files the gold patch touches. Cross-checked against solution/gold.patch."
+        },
+        "created": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "uniqueItems": true,
+          "description": "Free-form labels for slicing results, e.g. off-by-one, mutable-default, packaging."
+        }
+      }
+    }
+  }
+}

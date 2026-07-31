@@ -1,0 +1,54 @@
+id: testupdate_money_api_v2
+category: test_update
+difficulty: medium
+split: train
+
+instruction: >
+  src/money.py has been reworked for release 2.0 and the change is deliberate: amounts
+  are now stored as whole cents, the constructor helpers were renamed, and rendering now
+  prefixes the three-letter currency code instead of a dollar sign. CHANGELOG.md in the
+  repo root lists every rename. The library itself is correct and must not be changed
+  back - what is stale is the repo's own suite at tests/test_money.py, which still calls
+  the 1.x API and no longer even imports. Bring that suite up to the 2.0 API, keeping the
+  same breadth of coverage: every behaviour that was checked before should still be
+  checked afterwards, including the renamed entry points and the guarantee that splitting
+  an amount neither creates nor destroys a cent.
+
+repo:
+  root: repo/
+  loc: 108
+  entrypoint_hint: tests/test_money.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_money_suite.py]
+  timeout_s: 180
+  n_tests: 10
+
+constraints:
+  allowed_write_globs:
+    - "repo/tests/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/src/**"
+    - "repo/smoke/**"
+  max_turns: 25
+  max_tool_calls: 50
+
+provenance:
+  source: textbook_pattern
+  license: MIT
+  notes: >
+    A library-upgrade migration, the everyday form of test maintenance: the production
+    code is right and the tests are wrong. Written for this benchmark as the reference
+    test_update task. The five renames mirror the classic Fowler "Money" refactor toward
+    integer-cent storage with weighted allocation; no specific upstream commit was
+    inverted, hence textbook_pattern rather than real_repo.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [api-migration, test-maintenance, money, changelog]
