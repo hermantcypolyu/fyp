@@ -1,0 +1,54 @@
+id: bugfix_ordinal_suffix_teens
+category: bug_fix
+difficulty: easy
+split: train
+
+instruction: >
+  Retry messages are printing ordinals like "111st attempt" and "212nd attempt". English
+  gives every number whose last two digits fall between 11 and 13 a plain "th" suffix, at
+  any magnitude, so those should read "111th" and "212th". The rule is already handled
+  correctly for 11, 12 and 13 themselves, but not for larger numbers ending in them. Fix
+  find_ordinal in tenacity/_utils.py. Numbers ending in 1, 2 or 3 that are *not* in that
+  range must keep "st", "nd" and "rd" - 101 is still "101st".
+
+repo:
+  root: repo/
+  loc: 78
+  entrypoint_hint: tenacity/_utils.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_utils.py]
+  timeout_s: 60
+  n_tests: 11
+
+constraints:
+  allowed_write_globs:
+    - "repo/tenacity/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: real_repo
+  origin: https://github.com/jd/tenacity @ 0bdf1d9e5f42b7179e7aae52cb70d26283a4c5ed
+  license: Apache-2.0
+  notes: >
+    Upstream commit 0bdf1d9e5f42 (2026-02-17), "Fix ordinal suffix generation for numbers
+    ending in 11, 12, 13 (#556)". tenacity/_utils.py is taken verbatim from that commit's
+    PARENT, so the recursion on `pos_num % 10` is the code that really shipped;
+    solution/fixed/ is the same file at the commit, so the gold patch is the
+    contributor's actual fix. Assertions come from the regression test added in that
+    commit, split by behaviour and extended to larger magnitudes. Only the utility module
+    is included: upstream's package __init__ is several hundred lines of retry machinery
+    irrelevant to the defect, and is replaced here by a plain namespace.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [off-by-one, recursion, string-formatting, real-repo, tenacity]

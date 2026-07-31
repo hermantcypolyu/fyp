@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter
 from dataclasses import dataclass
@@ -76,12 +77,17 @@ class Finding:
 class Report:
     def __init__(self) -> None:
         self.findings: list[Finding] = []
+        self.notes: list[str] = []
 
     def error(self, code: str, task: str, message: str, fix: str = "") -> None:
         self.findings.append(Finding(code, task, message, fix, "error"))
 
     def warn(self, code: str, task: str, message: str, fix: str = "") -> None:
         self.findings.append(Finding(code, task, message, fix, "warn"))
+
+    def note(self, message: str) -> None:
+        """Something --fix-counts changed on disk. Not a finding; the author must still see it."""
+        self.notes.append(message)
 
     def for_task(self, task_id: str) -> list[Finding]:
         return [f for f in self.findings if f.task == task_id]
@@ -183,18 +189,21 @@ def check_layout(task: Task, report: Report) -> None:
         )
 
 
-def check_loc(task: Task, report: Report) -> None:
+def check_loc(task: Task, report: Report, *, fix: bool = False) -> None:
     if not task.repo_dir.is_dir():
         return
     actual = count_loc(task.repo_dir)
     declared = task.data.get("repo", {}).get("loc")
     if declared != actual:
-        report.error(
-            "LOC",
-            task.id,
-            f"repo.loc is {declared}, but repo/ actually has {actual} lines of code",
-            f"Set repo.loc: {actual}",
-        )
+        if fix and rewrite_scalar(task, r"^(\s*loc:\s*)\d+\s*$", actual):
+            report.note(f"{task.id}: repo.loc {declared} -> {actual}")
+        else:
+            report.error(
+                "LOC",
+                task.id,
+                f"repo.loc is {declared}, but repo/ actually has {actual} lines of code",
+                f"Set repo.loc: {actual}",
+            )
     if actual > 300:
         report.warn(
             "LOC_BIG",
@@ -202,6 +211,24 @@ def check_loc(task: Task, report: Report) -> None:
             f"repo/ is {actual} LOC; 5.4 rule 6 prefers under 300",
             "Trim it. Long repos burn context and, later, VRAM.",
         )
+
+
+def rewrite_scalar(task: Task, pattern: str, value: int) -> bool:
+    """Rewrite one `key: <int>` line in the task's YAML in place.
+
+    Only ever used for fields that are a *measurement* rather than a judgement - the LOC
+    of `repo/` and the number of tests pytest collects. Everything else an author has to
+    mean on purpose. A regex rather than a YAML round-trip because dumping the parsed
+    document would reflow every block scalar in the file and destroy the prose.
+    """
+    path = task.path / "task.yaml"
+    text = path.read_text(encoding="utf-8")
+    new_text, n = re.subn(pattern, lambda m: f"{m.group(1)}{value}", text, count=1, flags=re.MULTILINE)
+    if n != 1:
+        return False
+    path.write_text(new_text, encoding="utf-8", newline="\n")
+    task.data["repo"] = task.data.get("repo", {})
+    return True
 
 
 def check_constraints(task: Task, report: Report) -> None:
@@ -346,7 +373,7 @@ def check_provenance(task: Task, report: Report) -> None:
             )
 
 
-def check_behaviour(task: Task, report: Report) -> None:
+def check_behaviour(task: Task, report: Report, *, fix: bool = False) -> None:
     """The two checks that actually matter: solvable by gold, failing without it (5.4 rules 1-2)."""
     tid = task.id
     try:
@@ -367,12 +394,15 @@ def check_behaviour(task: Task, report: Report) -> None:
         return
 
     if without.collected != task.n_tests:
-        report.error(
-            "N_TESTS",
-            tid,
-            f"verification.n_tests is {task.n_tests}, pytest collects {without.collected}",
-            f"Set n_tests: {without.collected}",
-        )
+        if fix and rewrite_scalar(task, r"^(\s*n_tests:\s*)\d+\s*$", without.collected):
+            report.note(f"{tid}: verification.n_tests {task.n_tests} -> {without.collected}")
+        else:
+            report.error(
+                "N_TESTS",
+                tid,
+                f"verification.n_tests is {task.n_tests}, pytest collects {without.collected}",
+                f"Set n_tests: {without.collected}",
+            )
 
     if without.all_passed:
         report.error(
@@ -472,6 +502,12 @@ def main() -> int:
         "--require-mix", action="store_true", help="Treat corpus mix/provenance shortfalls as errors (the B2 gate)."
     )
     parser.add_argument("--quiet", action="store_true", help="Only print failures.")
+    parser.add_argument(
+        "--fix-counts",
+        action="store_true",
+        help="Write back the two purely measured fields (repo.loc, verification.n_tests) "
+        "instead of reporting them as errors. Everything else is a judgement and is never touched.",
+    )
     args = parser.parse_args()
 
     validator = Draft202012Validator(json.loads(SCHEMA_PATH.read_text(encoding="utf-8")))
@@ -496,14 +532,14 @@ def main() -> int:
     for task in tasks:
         schema_ok = check_schema(task, report, validator)
         check_layout(task, report)
-        check_loc(task, report)
+        check_loc(task, report, fix=args.fix_counts)
         check_constraints(task, report)
         check_gold_patch(task, report)
         check_leakage(task, report)
         check_smoke(task, report)
         check_provenance(task, report)
         if not args.no_run and schema_ok and not report.for_task(task.id):
-            check_behaviour(task, report)
+            check_behaviour(task, report, fix=args.fix_counts)
 
         findings = report.for_task(task.id)
         if findings:
@@ -522,6 +558,10 @@ def main() -> int:
             print(finding.render())
 
     n_err, n_warn = len(report.errors), len(report.warnings)
+    if report.notes:
+        print("\nRewritten by --fix-counts:")
+        for note in report.notes:
+            print(f"  {note}")
     print(f"\n{'-' * 60}")
     if n_err:
         print(f"FAILED: {n_err} error(s), {n_warn} warning(s) across {len(tasks)} task(s)")
