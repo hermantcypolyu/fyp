@@ -138,6 +138,91 @@ def gather(clone: Path, rev: str, seeds: list[str], package_root: str, package: 
     return out
 
 
+def _extract_test_update(args, clone, sha, parent, subject, cdate, origin, package_root, package, dest) -> int:
+    """Lay out a test_update task.
+
+    The direction is the opposite of a bug fix, and that is the point. Upstream renamed
+    something and updated its suite in one commit; we take the source from *after* and the
+    suite from *before*, so the library is correct and the project's own tests are stale
+    and no longer even import. Nothing is invented, and the "correct" updated suite the
+    reference solution needs already exists - it is the suite at the commit.
+    """
+    print("new source (from the commit) -> repo/")
+    source = gather(clone, sha, args.source, package_root, package, args.depth)
+    repo_loc = 0
+    for path, text in sorted(source.items()):
+        rel = Path(path).relative_to(Path(package_root).parent) if package_root in path else Path(path).name
+        out = dest / "repo" / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8", newline="\n")
+        n = loc(text)
+        repo_loc += n
+        print(f"  {n:>4}L  repo/{Path(rel).as_posix()}")
+
+    print("\nstale suite (from the parent) -> repo/tests/   [this is what the agent edits]")
+    for path in args.test:
+        text = show(clone, parent, path)
+        if text is None:
+            print(f"  MISSING at {parent[:8]}: {path}", file=sys.stderr)
+            continue
+        name = Path(path).name
+        out = dest / "repo" / "tests" / name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8", newline="\n")
+        n = loc(text)
+        repo_loc += n
+        print(f"  {n:>4}L  repo/tests/{name}")
+
+    print("\nupdated suite (from the commit) -> solution/fixed/tests/   [the reference answer]")
+    for path in args.test:
+        text = show(clone, sha, path)
+        if text is None:
+            continue
+        name = Path(path).name
+        out = dest / "solution" / "fixed" / "tests" / name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8", newline="\n")
+        print(f"  {loc(text):>4}L  solution/fixed/tests/{name}")
+
+    (dest / "tests").mkdir(exist_ok=True)
+    (dest / "smoke").mkdir(exist_ok=True)
+
+    yaml_path = dest / "task.yaml"
+    if not yaml_path.exists() or args.force:
+        body = TASK_YAML.format(
+            task_id=args.id,
+            category=args.category,
+            difficulty=args.difficulty,
+            split=args.split,
+            subject=subject,
+            hint=f"tests/{Path(args.test[0]).name}",
+            test_files="tests/TODO.py",
+            allowed='    - "repo/tests/**"',
+            origin=origin,
+            sha=sha,
+            short=sha[:12],
+            cdate=cdate,
+            licence=args.licence,
+            n_changed=len(args.test),
+            today=date.today().isoformat(),
+        )
+        # The library is correct in a test_update task; only the suite may be edited.
+        body = body.replace('    - "repo/smoke/**"\n', '    - "repo/smoke/**"\n    - "repo/%s/**"\n' % package)
+        yaml_path.write_text(body, encoding="utf-8", newline="\n")
+
+    print(f"\nrepo/ is {repo_loc} lines of code")
+    print(f"\nscaffolded {dest.relative_to(REPO_ROOT)}")
+    print("\nnow, by hand:")
+    print("  1. trim both suites to what the reduced repo can satisfy, keeping them in step")
+    print("  2. write tests/ - the HIDDEN meta-suite: it must check that the repo's own suite")
+    print("     passes AND is still substantive, and separately re-assert the library contract,")
+    print("     so 'fixing' the tests by reverting the library fails. Copy the pattern from")
+    print("     benchmark/tasks/train/testupdate_money_api_v2/tests/test_money_suite.py")
+    print("  3. write the instruction from the changelog/commit, naming no hidden test")
+    print("  4. make gold-patches && make validate && make verify-gold")
+    return 0
+
+
 TASK_YAML = """\
 id: {task_id}
 category: {category}
@@ -192,7 +277,16 @@ metadata:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--clone", required=True, type=Path, help="path to a local clone")
-    parser.add_argument("--sha", required=True, help="the commit that FIXED the bug")
+    parser.add_argument("--sha", required=True, help="the commit that FIXED the bug, or made the API change")
+    parser.add_argument(
+        "--mode",
+        choices=("bug_fix", "test_update"),
+        default="bug_fix",
+        help="bug_fix (default): buggy source from the parent, fixed source and hidden test from the "
+        "commit. test_update: source from the COMMIT (the new, correct API) and the project's own "
+        "suite from the PARENT (stale, still calling the old API) into repo/tests/ - which is the "
+        "whole shape of a test_update task, with nothing invented.",
+    )
     parser.add_argument(
         "--source",
         required=True,
@@ -238,7 +332,10 @@ def main() -> int:
         raise SystemExit(f"{dest} already exists (--force to overwrite)")
     dest.mkdir(parents=True, exist_ok=True)
 
-    print(f"commit  {sha}\nparent  {parent}\nsubject {subject}\n")
+    print(f"commit  {sha}\nparent  {parent}\nsubject {subject}\nmode    {args.mode}\n")
+
+    if args.mode == "test_update":
+        return _extract_test_update(args, clone, sha, parent, subject, cdate, origin, package_root, package, dest)
 
     print("buggy source (from the parent) -> repo/")
     buggy = gather(clone, parent, args.source, package_root, package, args.depth)

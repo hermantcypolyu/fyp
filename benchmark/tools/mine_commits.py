@@ -43,6 +43,40 @@ FIX_SUBJECT = re.compile(
     re.IGNORECASE,
 )
 
+#: The five task categories in AGENT_BUILD_SPEC 5.2 are not all fed by bug fixes, and a
+#: corpus that is 50% real_repo in one category and 0% in the other four is not really 50%
+#: real. Each preset below finds the kind of commit that inverts into one category:
+#:
+#:   bug_fix       a defect was fixed and a test proves it     -> invert the source
+#:   api_change    a public name/behaviour changed             -> keep the NEW source, the OLD tests
+#:   feature       a capability was added, with tests          -> take the source from the parent
+#:   config        packaging or re-export metadata was fixed   -> invert the config
+#:   docs          a docstring or documented example was wrong -> invert the docstring
+#:
+#: `api_change` is the one that pays for itself: it is exactly the test_update shape, and
+#: reversing the usual extraction (new source, stale tests) needs no invention at all.
+KINDS: dict[str, re.Pattern[str]] = {
+    "bug_fix": FIX_SUBJECT,
+    "api_change": re.compile(
+        r"\brename[ds]?\b|\bdeprecat|\bbreaking\b|\bremove[ds]?\b|\breplace[ds]?\b|"
+        r"\bmigrat|\bdrop\b|^refactor[(:\[ ]|\bapi\b",
+        re.IGNORECASE,
+    ),
+    "feature": re.compile(
+        r"^(feat|feature)\b|^feat[(:\[]|\badd(s|ed|ing)?\b|\bsupport for\b|\bnew option\b", re.IGNORECASE
+    ),
+    "config": re.compile(
+        r"packag|pyproject|setup\.(py|cfg)|\bimport error\b|__init__|\bexport|\brequires.python\b|\bwheel\b|\bversion\b",
+        re.IGNORECASE,
+    ),
+    "docs": re.compile(r"^docs?[(:\[ ]|\bdocstring\b|\bdoctest\b|\bexample\b|\bdocumented?\b", re.IGNORECASE),
+}
+
+#: Per-kind extra requirement on the *paths* a commit touched. Returning False rejects it.
+KIND_PATH_RULES: dict[str, str] = {
+    "config": r"pyproject\.toml$|setup\.(py|cfg)$|__init__\.py$|_version\.py$",
+}
+
 #: Subjects that match FIX_SUBJECT but are not code fixes.
 NOISE_SUBJECT = re.compile(
     r"\b(typo|changelog|readme|docs?|lint|format|black|isort|ruff|flake8|mypy|"
@@ -136,7 +170,16 @@ def read_licence(repo: Path) -> str:
     return "no licence file found - DO NOT USE"
 
 
-def mine(repo: Path, *, limit: int, max_source_lines: int, since: str | None) -> list[Candidate]:
+def mine(
+    repo: Path,
+    *,
+    limit: int,
+    max_source_lines: int,
+    since: str | None,
+    kind: str = "bug_fix",
+) -> list[Candidate]:
+    subject_re = KINDS[kind]
+    path_rule = re.compile(KIND_PATH_RULES[kind]) if kind in KIND_PATH_RULES else None
     sep = "\x1e"
     args = ["log", f"--pretty=format:{sep}%H%x1f%ad%x1f%s", "--date=short", "--numstat", "--no-merges"]
     if since:
@@ -154,11 +197,12 @@ def mine(repo: Path, *, limit: int, max_source_lines: int, since: str | None) ->
             continue
         sha, date, subject = parts
 
-        if not FIX_SUBJECT.search(subject) or NOISE_SUBJECT.search(subject):
+        if not subject_re.search(subject) or NOISE_SUBJECT.search(subject):
             continue
 
         cand = Candidate(sha=sha, date=date, subject=subject)
         skip = False
+        all_paths: list[str] = []
         for line in body.splitlines():
             cells = line.split("\t")
             if len(cells) != 3:
@@ -167,8 +211,10 @@ def mine(repo: Path, *, limit: int, max_source_lines: int, since: str | None) ->
             if added == "-" or removed == "-":  # binary
                 skip = True
                 break
+            all_paths.append(path)
             churn = int(added) + int(removed)
-            if not path.endswith(".py"):
+            # config_fix tasks live in packaging metadata, which is not Python at all.
+            if not path.endswith((".py", ".toml", ".cfg")):
                 continue
             if TEST_PATH.search(path):
                 cand.test_files.append(path)
@@ -178,6 +224,8 @@ def mine(repo: Path, *, limit: int, max_source_lines: int, since: str | None) ->
                 cand.source_lines += churn
 
         if skip or not cand.source_files or not cand.test_files:
+            continue
+        if path_rule and not any(path_rule.search(p) for p in all_paths):
             continue
         if cand.source_lines == 0 or cand.source_lines > max_source_lines:
             continue
@@ -197,6 +245,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", action="append", default=[], metavar="URL", help="repeatable")
     parser.add_argument("--show", metavar="SHA", help="print one commit's full diff and exit")
+    parser.add_argument(
+        "--kind",
+        choices=sorted(KINDS),
+        default="bug_fix",
+        help="which task category to mine sources for (default bug_fix)",
+    )
     parser.add_argument("--limit", type=int, default=25, help="candidates per repo (default 25)")
     parser.add_argument("--max-source-lines", type=int, default=60)
     parser.add_argument("--since", metavar="DATE", help="e.g. 2019-01-01")
@@ -215,12 +269,12 @@ def main() -> int:
             show(clone, args.show)
             return 0
 
-        cands = mine(clone, limit=args.limit, max_source_lines=args.max_source_lines, since=args.since)
+        cands = mine(clone, limit=args.limit, max_source_lines=args.max_source_lines, since=args.since, kind=args.kind)
         head = git(clone, "rev-parse", "HEAD").strip()
         report[url] = {"licence": licence, "head": head, "candidates": [c.as_dict() for c in cands]}
 
         print(f"\n=== {url}")
-        print(f"    licence: {licence}    head: {head}")
+        print(f"    licence: {licence}    head: {head}    kind: {args.kind}")
         if licence.startswith(("no licence", "GPL")):
             print("    ^^ unusable for redistribution; skipping the listing")
             continue
