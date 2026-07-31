@@ -1,0 +1,61 @@
+id: feature_lru_cache_eviction_stats
+category: small_feature
+difficulty: hard
+split: train
+
+instruction: >
+  We size these caches by guesswork: an LRUCache will not tell you whether it is earning
+  its memory. Give each instance counters, exposed as a stats property returning a small
+  immutable value object with exactly the attributes hits, misses, evictions, size and
+  hit_rate. get() counts one hit when the key is present and one miss when it is not;
+  put() counts neither, and neither does a membership test with in. evictions counts
+  entries discarded because the cache was over capacity, one per entry - overwriting a
+  key that is already stored is not an eviction, and clear() drops entries without
+  counting any. size is len(cache) at the moment stats was read, and hit_rate is
+  round(hits / (hits + misses), 4), or 0.0 when there have been no reads at all. That
+  object must be a snapshot: cache activity after it is handed out must not change it,
+  and assigning to any of its attributes must raise AttributeError. Add reset_stats() as
+  well - it returns None and puts hits, misses and evictions back to 0 while leaving the
+  cached entries and their recency order alone. No existing method signature, return
+  value or eviction behaviour may change.
+
+repo:
+  root: repo/
+  loc: 87
+verification:
+  runner: pytest
+  test_files: [tests/test_cache_stats.py]
+  timeout_s: 60
+  n_tests: 14
+constraints:
+  allowed_write_globs:
+    - "repo/src/**"
+    - "repo/*.md"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 30
+  max_tool_calls: 60
+
+provenance:
+  source: textbook_pattern
+  license: MIT
+  notes: >
+    Authored for this benchmark; no upstream commit was inverted. Instrumenting a cache
+    after the fact is the same job CPython's functools.lru_cache does with CacheInfo,
+    and that Django's and Werkzeug's cache backends, cachetools and Guava's CacheStats
+    all grew for the same reason - nobody can size a cache they cannot measure. It is
+    rated hard because the arithmetic is trivial and the placement is not: the counters
+    have to be threaded through several call sites in one method each, and the two easy
+    mistakes both live on paths that otherwise look right - charging an eviction for an
+    overwrite, which happens if the counter goes next to the delete at the top of put()
+    rather than next to the one in the capacity loop, and charging a miss for a write,
+    which happens if the write path is routed through get().
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [lru-cache, instrumentation, counters, eviction, immutability]

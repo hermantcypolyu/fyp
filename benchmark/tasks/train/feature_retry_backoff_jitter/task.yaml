@@ -1,0 +1,62 @@
+id: feature_retry_backoff_jitter
+category: small_feature
+difficulty: medium
+split: train
+
+instruction: >
+  Our clients retry on a flat delay, so an upstream brown-out has the whole fleet
+  retrying in lockstep. Add exponential backoff, a ceiling and optional full jitter to
+  call_with_retry and to the retry decorator in src/retry.py as four keyword-only
+  options, named and defaulted exactly: backoff=1.0, max_delay=None, jitter=False,
+  rng=None. The wait after the n-th failure (n from 1) is delay * backoff ** (n - 1),
+  then clamped to max_delay when that is not None, then - only when jitter - replaced by
+  rng.uniform(0.0, wait) on the already-clamped value; that float is what sleeper gets.
+  rng must be injectable: any object exposing uniform(a, b), falling back to a
+  module-level random.Random when None. A backoff below 1.0 or a negative max_delay must
+  raise ValueError from call_with_retry before the first attempt. The defaults must
+  reproduce today's behaviour exactly - at backoff=1.0, max_delay=None and jitter=False
+  every wait is still exactly delay - and existing parameter names, exception order and
+  the injected sleeper must not change. README.md repeats this design note.
+
+repo:
+  root: repo/
+  loc: 115
+  entrypoint_hint: src/retry.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_retry_backoff.py]
+  timeout_s: 60
+  n_tests: 14
+
+constraints:
+  allowed_write_globs:
+    - "repo/src/**"
+    - "repo/*.md"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 30
+  max_tool_calls: 60
+
+provenance:
+  source: textbook_pattern
+  license: MIT
+  notes: >
+    Authored for this benchmark; no upstream commit was inverted. It reproduces the
+    growth path every retry library goes through - tenacity, urllib3.util.Retry,
+    botocore's standard mode and Polly all started with a constant delay and later grew
+    a multiplier, a ceiling and a jitter mode - and the "full jitter" rule is the one
+    from the AWS Architecture Blog's Exponential Backoff And Jitter post that those
+    libraries converged on. It is representative because the interesting part is not the
+    arithmetic but keeping the old default path bit-identical while threading four new
+    options through two entry points, and because the seam that makes it testable
+    (injected sleeper, injected random source) is the same seam real libraries expose.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [retry, exponential-backoff, jitter, dependency-injection, defaults]

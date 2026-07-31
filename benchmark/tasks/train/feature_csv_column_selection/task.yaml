@@ -1,0 +1,60 @@
+id: feature_csv_column_selection
+category: small_feature
+difficulty: easy
+split: train
+
+instruction: >
+  src/summarise.py can count rows and tally one column at a time, but the reporting job
+  now needs a profile of several columns at once. Add describe(rows, columns=None) to
+  src/summarise.py, returning a dict keyed by column name that iterates in the order the
+  columns were requested, or in column_names(rows) order when columns is None; a
+  requested column appearing in no row raises KeyError. A column's values are its cells
+  that are present and neither None nor the empty string, and count is how many there
+  are. If a column has at least one such value and every one of them converts with
+  float(), its entry is exactly the four keys count, min, max and mean, with min, max
+  and mean as floats and mean equal to round(sum / count, 4). Otherwise the entry is
+  exactly the two keys count and most_common, where most_common is the value occurring
+  most often with a tie going to whichever appears earliest in row order, and is None
+  when count is 0. Leave row_count, column_names, values_of and count_by alone.
+
+repo:
+  root: repo/
+  loc: 61
+  entrypoint_hint: src/summarise.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_column_profiles.py]
+  timeout_s: 60
+  n_tests: 13
+constraints:
+  allowed_write_globs:
+    - "repo/src/**"
+    - "repo/*.md"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 30
+  max_tool_calls: 60
+
+provenance:
+  source: textbook_pattern
+  license: MIT
+  notes: >
+    Authored for this benchmark; no upstream commit was inverted. It is the "describe"
+    step every ad-hoc reporting script grows once tallying one column stops being
+    enough - pandas.DataFrame.describe, csvkit's csvstat and the profiling helpers
+    inside most internal ETL repos all expose the same split between numeric and
+    categorical columns. Representative because the code is trivial but the contract is
+    not: the failure modes are the ones underspecified feature requests always produce -
+    counting blank cells, sorting the output instead of preserving requested order,
+    resolving a most-common tie arbitrarily, and returning a numeric shape for a column
+    that happens to be empty.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-07-31
+  tags: [tabular, statistics, api-design, ragged-rows, tie-breaking]
