@@ -141,3 +141,55 @@ start` unverified because Ray cannot start on native Windows).
 this network even though release-binary downloads do not). Then `build_catalogue.py`,
 `benchmark/catalogue.md`, the JSONL build artefacts, and sealing the held-out split by recording
 its commit SHA here.
+
+---
+
+## 2026-08-01 · B3 batch 1 · The six agent tools (§5.5)
+
+**Done:** `envs/coding_env/tools.py` — `list_files`, `read_file`, `write_file`, `edit_file`,
+`run_tests`, `submit`, and nothing else. A `Toolbox` binds them to one materialised sandbox and one
+task's `constraints:` block; `Toolbox.for_task(task, root)` is the factory. Write permission is a
+pure string match against `benchmark.tools.globs`, in the same `repo/…`-rooted namespace `task.yaml`
+already uses, so there is no path arithmetic at the decision point.
+
+**Three properties the tests pin down:**
+- **Refusals, not tracebacks.** Nothing raises out of a tool. Every failure is one sentence naming
+  the file and the fix (`No match for old_str in repo/pkg/mod.py. Read the file and copy the text
+  exactly.`), and `test_every_error_fits_the_short_budget` asserts that literally — a 1.5B model
+  cannot act on a stack trace.
+- **Deny beats allow.** `repo/pkg/conftest.py` matches both lists; it is refused, and it raises
+  `tests_modified`. If allow had won, the §5.7 gate would be bypassable by picking the right path.
+- **Two failures are gates, not errors.** Writing to `forbidden_write_globs` raises
+  `tests_modified`; writing outside the sandbox root (checked *after* `resolve()`, so a symlink is
+  caught too) raises `sandbox_escape`. Writing to an out-of-scope-but-harmless path — `repo/README.md`
+  — is refused with **no** gate. Being out of scope is not cheating, and conflating the two would
+  zero rewards for honest mistakes.
+
+**Truncation is unconditional.** Every output goes through `truncate(text, budget)`: head 60% / tail
+40% with an explicit marker, because the two informative parts of a pytest run are the first failure
+and the final count. `read_file` additionally caps at 200 lines per call and returns
+`continue with start=N`.
+
+**`run_tests` cannot leak the grading signal**, for two independent reasons: the hidden suite is
+never written into the agent's sandbox (`materialise(..., include_tests=False)`), and the tool
+*refuses to run at all* if a `tests/` directory is nevertheless present. The second is the useful
+one — it turns a sandbox-construction bug into a loud failure instead of a silently inflated score.
+
+**Grounded in (spec §1.3), all @ `ec5a8136046aa0dd0c1525313654502f2fb7c42e`:**
+- `resources_servers/legal_agent_bench/vendor/harvey_labs/lab_harbor/container_tool_runner.py` —
+  `_ensure_allowed` (root containment), `_read`/`_slice_read_content` (paging + line cap),
+  `_write`, `_edit` (exact match, count-aware errors)
+- `resources_servers/legal_agent_bench/vendor/harvey_labs/lab_harbor/tools.py` — `TOOL_DEFINITIONS`
+  JSON schema shape
+- `resources_servers/browsecomp_advanced_harness/app.py` — `_bash_truncate` head/tail truncation
+- `resources_servers/example_multi_step/app.py` — tool routing off a `SimpleResourcesServer`
+
+**Commands run:** `uv run pytest -q` · `uv run ruff check .` · `uv run ruff format envs/`
+
+**Numbers (measured):** **81 tests passed** (32 new in `envs/tests/test_tools.py`); ruff **0
+findings**. No task, sandbox or benchmark file was touched; held-out untouched.
+
+**Next:** B3 batch 2 — the sandbox and its isolation proof: agent copy built with
+`include_tests=False`, verifier restoring pristine tests from source before grading, no network,
+CPU/memory caps, hard timeout (timeout = failure, reward 0), and a test proving the hidden suite is
+both unreadable and unwritable from inside the sandbox.
