@@ -1,0 +1,42 @@
+id: feature_thefuzz_normalize
+category: small_feature
+difficulty: easy
+split: heldout
+
+instruction: >
+  The text normalizer should collapse whitespace and turn hyphenated tokens into plain word boundaries. The current helper only lowercases the text, so it misses the intended normalization behavior.
+
+repo:
+  root: repo/
+  loc: 3
+  entrypoint_hint: normalizer.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_feature_thefuzz_normalize.py]
+  timeout_s: 60
+  n_tests: 3
+  floor_tests: 1
+constraints:
+  allowed_write_globs:
+    - "repo/normalizer.py"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: authored
+  license: MIT
+  notes: >
+    Authored stub inspired by thefuzz's string preprocessing. NOT derived from that project's
+    source, so it is not marked real_repo.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-03
+  tags: [normalizer, whitespace, small-feature]

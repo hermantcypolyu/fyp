@@ -1,0 +1,43 @@
+id: testupdate_thefuzz_api_rename
+category: test_update
+difficulty: medium
+split: heldout
+
+instruction: >
+  The project’s own visible test suite still calls the old helper name from a renamed API. Update the tests so they exercise the current public symbol without changing the expected behavior or the library implementation.
+
+repo:
+  root: repo/
+  loc: 11
+  entrypoint_hint: tests/test_strings.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_testupdate_thefuzz_api_rename.py]
+  timeout_s: 60
+  n_tests: 3
+  floor_tests: 0
+
+constraints:
+  allowed_write_globs:
+    - "repo/tests/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+    - "repo/compare.py"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: authored
+  license: MIT
+  notes: >
+    Authored to fit the benchmark's category mix without reusing a library already present in train.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-03
+  tags: [api-rename, test-maintenance, visible-suite]

@@ -474,3 +474,46 @@ expected at 3/10 held-out); gold patches **3/3 solvable and failable**; unit tes
 
 **Held-out is NOT sealed.** No commit SHA recorded here; the split stays open until all 10 are
 reviewed.
+
+---
+
+## 2026-08-03 · Held-out batches 2–4 · measurement + two corrections — **NOT SEALED**
+
+Floors measured for the remaining seven tasks via `validate_tasks.py --fix-counts`. They do **not**
+meet the ≥6 headroom bar that batch 1 cleared:
+
+| task | cat | diff | n | floor | headroom |
+| --- | --- | --- | --- | --- | --- |
+| `bugfix_moreitertools_window` | bug_fix | hard | 3 | 2 | 1 |
+| `configfix_pkg_cli_entrypoint` | config_fix | easy | 3 | 2 | 1 |
+| `feature_inflect_plural_forms` | small_feature | medium | 3 | 1 | 2 |
+| `feature_thefuzz_normalize` | small_feature | easy | 3 | 1 | 2 |
+| `bugfix_slugify_empty_string` | bug_fix | easy | 4 | 1 | 3 |
+| `docs_readme_cli_examples` | docs_improve | hard | 3 | 0 | 3 |
+| `testupdate_thefuzz_api_rename` | test_update | medium | 3 | 0 | 3 |
+
+**Limitation — held-out/train repo overlap.** Two held-out tasks reuse a library the train split
+already draws from, so they are not fully independent measurements:
+
+- `tenacity` — train `bugfix_ordinal_suffix_teens` ↔ held-out `bugfix_retry_base_composition`
+- `funcy` — train `bugfix_throttle_timedelta`, `bugfix_where_missing_keys`,
+  `testupdate_funcy_omit_rename` ↔ held-out `testupdate_rpartial_rcurry_rename`
+
+A further three (`bugfix_moreitertools_window`, `feature_thefuzz_normalize`,
+`testupdate_thefuzz_api_rename`) carry `more-itertools`/`thefuzz` in their *names* only — they are
+authored stubs sharing no code with train's `testupdate_always_reversible_rename`. The name overlap
+is cosmetic; the code overlap is `tenacity` and `funcy`. Only `mistune` is genuinely unseen.
+
+**Correction — provenance was overstated.** `bugfix_slugify_empty_string` and
+`feature_thefuzz_normalize` were marked `source: real_repo` with upstream origins in the previous
+session. Their repos are 3–8 line authored stubs, not code derived from those projects. Both are
+back to `source: authored` with the origin removed. `real_repo` share is therefore **3/10 (30%)**
+held-out, not 5/10 — below the §5.3 ≥50% target, and the validator now warns accordingly.
+
+**Commands run:** `validate_tasks.py --split heldout --fix-counts` ·
+`verify_gold_patches.py --split heldout`
+
+**Numbers (measured):** validator **10 tasks, 0 errors, 1 warning** (provenance 30%); gold patches
+**10/10 solvable and failable**; reward floor min 0.00 / mean 0.35 / max 0.67.
+
+**Held-out is NOT sealed.** ADR 0006 not implemented; no training run.

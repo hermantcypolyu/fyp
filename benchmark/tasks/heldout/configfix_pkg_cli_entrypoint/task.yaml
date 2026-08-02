@@ -1,0 +1,41 @@
+id: configfix_pkg_cli_entrypoint
+category: config_fix
+difficulty: easy
+split: heldout
+
+instruction: >
+  The package metadata exposes the project name and version, but the console entry point for the demo command is missing. Add the packaging declaration so the CLI can be discovered from the project metadata.
+
+repo:
+  root: repo/
+  loc: 4
+  entrypoint_hint: pyproject.toml
+
+verification:
+  runner: pytest
+  test_files: [tests/test_configfix_pkg_cli_entrypoint.py]
+  timeout_s: 60
+  n_tests: 3
+  floor_tests: 2
+constraints:
+  allowed_write_globs:
+    - "repo/pyproject.toml"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: authored
+  license: MIT
+  notes: >
+    Authored to fit the benchmark's category mix without reusing a library already present in train.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-03
+  tags: [packaging, entry-point, configuration]

@@ -1,0 +1,41 @@
+id: bugfix_moreitertools_window
+category: bug_fix
+difficulty: hard
+split: heldout
+
+instruction: >
+  The sliding-window helper should return an empty result when the requested size exceeds the input length, instead of producing a malformed slice. Keep the public contract intact and preserve the existing behavior for valid windows.
+
+repo:
+  root: repo/
+  loc: 7
+  entrypoint_hint: windowing.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_bugfix_moreitertools_window.py]
+  timeout_s: 60
+  n_tests: 3
+  floor_tests: 2
+constraints:
+  allowed_write_globs:
+    - "repo/windowing.py"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: authored
+  license: MIT
+  notes: >
+    Authored to fit the benchmark's category mix without reusing a library already present in train.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-03
+  tags: [windowing, sliding-window, edge-case]

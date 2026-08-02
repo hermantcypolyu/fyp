@@ -1,0 +1,42 @@
+id: docs_readme_cli_examples
+category: docs_improve
+difficulty: hard
+split: heldout
+
+instruction: >
+  The project README is missing the documented CLI examples that users expect from the current command surface. Update the docs so the examples match the documented flags and are discoverable from the repository entry point.
+
+repo:
+  root: repo/
+  loc: 2
+  entrypoint_hint: README.md
+
+verification:
+  runner: pytest
+  test_files: [tests/test_docs_readme_cli_examples.py]
+  timeout_s: 60
+  n_tests: 3
+  floor_tests: 0
+
+constraints:
+  allowed_write_globs:
+    - "repo/README.md"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: authored
+  license: MIT
+  notes: >
+    Authored to fit the benchmark's category mix without reusing a library already present in train.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-03
+  tags: [documentation, cli-examples, readme]

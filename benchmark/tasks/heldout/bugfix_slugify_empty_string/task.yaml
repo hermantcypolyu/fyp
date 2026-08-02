@@ -1,0 +1,42 @@
+id: bugfix_slugify_empty_string
+category: bug_fix
+difficulty: easy
+split: heldout
+
+instruction: >
+  Empty and whitespace-only input should not raise; the helper should return an empty slug instead and keep normal text normalization unchanged.
+
+repo:
+  root: repo/
+  loc: 8
+  entrypoint_hint: slugify_utils.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_bugfix_slugify_empty_string.py]
+  timeout_s: 60
+  n_tests: 4
+  floor_tests: 1
+constraints:
+  allowed_write_globs:
+    - "repo/slugify_utils.py"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: authored
+  license: MIT
+  notes: >
+    Authored stub inspired by python-slugify's empty-value handling. NOT derived from that
+    project's source, so it is not marked real_repo.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-03
+  tags: [slugify, empty-input, bug-fix]
