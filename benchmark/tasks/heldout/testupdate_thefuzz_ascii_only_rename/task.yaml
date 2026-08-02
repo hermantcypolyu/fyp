@@ -1,0 +1,57 @@
+id: testupdate_thefuzz_ascii_only_rename
+category: test_update
+difficulty: medium
+split: heldout
+
+instruction: >
+  The release this snapshot is taken from dropped end-of-life Python 2. The two ASCII
+  helpers in thefuzz/utils.py were merged into a single one - the pair that used to exist
+  because one of them coerced its argument first and the other assumed a plain string - and
+  the Python 2 branches went with them. That consolidation is deliberate and the library is
+  correct as shipped; no aliases were kept. What is stale is the project's own suite at
+  tests/test_utils.py, which still calls both removed helpers and still carries the
+  version-sniffing shim that aliased the old built-in string type. Bring that suite up to
+  date, keeping the same breadth of coverage: the ASCII helper must still be exercised over
+  the same mixed-script fixtures, and both the plain and the force-ascii forms of the
+  processing entry point must still be covered afterwards.
+
+repo:
+  root: repo/
+  loc: 136
+  entrypoint_hint: tests/test_utils.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_utils_suite.py]
+  timeout_s: 180
+  n_tests: 16
+  floor_tests: 10
+
+constraints:
+  allowed_write_globs:
+    - "repo/tests/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+    - "repo/thefuzz/**"
+  max_turns: 25
+  max_tool_calls: 50
+
+provenance:
+  source: real_repo
+  origin: https://github.com/seatgeek/thefuzz @ be37e0086695864a73550ffeecdad7318203d559
+  license: MIT
+  notes: >
+    `thefuzz/utils.py` and `thefuzz/string_processing.py` taken verbatim from the COMMIT;
+    the visible suite is upstream's `test_thefuzz.py` from the commit's PARENT, trimmed to
+    the two classes that depend only on those modules (the fuzz/process classes and the
+    pycodestyle import are dropped to stay inside the size budget and avoid a third-party
+    dependency). The gold patch is upstream's own update to those tests.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-03
+  tags: [api-rename, python2-removal, test-maintenance, visible-suite]

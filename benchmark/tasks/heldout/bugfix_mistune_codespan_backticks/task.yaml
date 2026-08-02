@@ -1,0 +1,56 @@
+id: bugfix_mistune_codespan_backticks
+category: bug_fix
+difficulty: medium
+split: heldout
+
+instruction: >
+  This renderer turns a parsed token stream back into Markdown, and its whole reason to
+  exist is that the result must re-parse to the same document. Code spans break that
+  promise as soon as their content contains a backtick. Re-formatting `` `a`b` `` gives back
+  something whose span now ends at the interior backtick instead of at the end of the
+  content, so the tail leaks out as ordinary text; a code span holding nothing but a single
+  backtick comes back as an empty fenced block instead. CommonMark's rule is that the
+  delimiter is a run of backticks longer than any run inside the content, and that when the
+  content itself begins or ends with a backtick the delimiter is held off it by one space,
+  which the parser strips again on the way back in. Make code spans obey that rule. Content
+  with no backticks in it must keep rendering exactly as it does today, and the renderer's
+  other methods must be left alone.
+
+repo:
+  root: repo/
+  loc: 264
+  entrypoint_hint: mistune/renderers/markdown.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_codespan.py]
+  timeout_s: 60
+  n_tests: 13
+  floor_tests: 6
+
+constraints:
+  allowed_write_globs:
+    - "repo/mistune/renderers/markdown.py"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 25
+  max_tool_calls: 50
+
+provenance:
+  source: real_repo
+  origin: https://github.com/lepture/mistune @ f6827e82fb0b
+  license: BSD-3-Clause
+  notes: >
+    `core.py`, `util.py`, `renderers/_list.py` and `renderers/markdown.py` taken verbatim
+    from the commit's PARENT, so the defect is the upstream one. The gold patch is the
+    commit's own change to `MarkdownRenderer.codespan`. Only the renderer slice is kept, so
+    the repo is larger than most tasks here but well under the 500-line cap.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-03
+  tags: [markdown, renderer, code-span, round-trip, commonmark]

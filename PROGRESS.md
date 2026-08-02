@@ -517,3 +517,55 @@ held-out, not 5/10 — below the §5.3 ≥50% target, and the validator now warn
 **10/10 solvable and failable**; reward floor min 0.00 / mean 0.35 / max 0.67.
 
 **Held-out is NOT sealed.** ADR 0006 not implemented; no training run.
+
+---
+
+## 2026-08-03 · Held-out batch 2 · 3 stubs replaced with real upstream tasks — **NOT SEALED**
+
+The padding option was rejected: assertions that co-flip on one edit raise `n_tests - floor_tests`
+on paper while reward stays binary, which would have hidden the failure being measured. These three
+are re-authored from real commits instead, extracted in the same direction as batch 1.
+
+| task | cat | diff | LOC | untouched | +gold | headroom |
+| --- | --- | --- | --- | --- | --- | --- |
+| `bugfix_mistune_angle_link_escape` | bug_fix | hard | 255 | 9/17 | 17/17 | 8 |
+| `bugfix_mistune_codespan_backticks` | bug_fix | medium | 264 | 6/13 | 13/13 | 7 |
+| `testupdate_thefuzz_ascii_only_rename` | test_update | medium | 136 | 10/16 | 16/16 | 6 |
+
+Headroom is honest in each: the mistune link bug is independently reachable through inline links,
+reference definitions, an escaped `<`/`>` and a dangling backslash; the codespan bug splits into
+fence *sizing* and space *padding*, so half a fix scores strictly between floor and 1.0; the thefuzz
+rename grades suite-passes, suite-not-gutted, new name used, each removed name gone, and the Python 2
+shim removed — all separately achievable.
+
+Stubs deleted: `bugfix_moreitertools_window`, `bugfix_slugify_empty_string`,
+`testupdate_thefuzz_api_rename`.
+
+**Mining findings — two categories cannot be filled from real upstream.**
+
+- `jaraco/inflect` has **no licence file** (`mine_commits.py` reports "DO NOT USE"), so it cannot
+  supply a `real_repo` task at all.
+- `python-slugify` yields **zero** candidates in every kind; `itsdangerous` yields none for `bug_fix`.
+- **`config_fix` and `docs_improve` return zero candidates** across all four licence-clean repos
+  unseen by train (slugify, itsdangerous, thefuzz, mistune). The one near miss,
+  mistune `2f2449dd0ab1` (adds `[project.scripts]` to `pyproject.toml`), is not extractable: its
+  `__main__.py` imports the full renderer stack, so the slice would be an order of magnitude over
+  the size budget.
+
+So the remaining `config_fix` and `docs_improve` slots will stay `source: authored` and be rebuilt at
+real size with real headroom, rather than being relabelled. Recorded here rather than forced.
+
+**Provenance now 6/10 (60%) `real_repo`** — above the §5.3 ≥50% target, and the corpus-mix warning is
+gone. No *new* train overlap: train uses neither mistune nor thefuzz. The tenacity/funcy overlap noted
+above is unchanged. New concentration limitation: **mistune now supplies 3 of 10** held-out tasks.
+
+Difficulty stands at 3 easy / 5 medium / 2 hard; one of the four remaining rebuilds must land easy
+rather than medium to reach the 4/4/2 target.
+
+**Commands run:** `validate_tasks.py --split heldout --fix-counts` ·
+`verify_gold_patches.py --split heldout`
+
+**Numbers (measured):** validator **10 tasks, 0 errors, 0 warnings**; gold patches **10/10 solvable
+and failable**; reward floor min 0.00 / mean 0.42 / max 0.67.
+
+**Held-out is NOT sealed.** ADR 0006 not implemented; no training run.

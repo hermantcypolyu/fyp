@@ -1,0 +1,57 @@
+id: bugfix_mistune_angle_link_escape
+category: bug_fix
+difficulty: hard
+split: heldout
+
+instruction: >
+  A link whose destination is wrapped in angle brackets loses everything the moment a
+  backslash appears inside it. `[link](<foo\*bar>)` does not become a link at all - it
+  degrades silently to literal text, and the same happens to a reference definition
+  written as `[x]: <a\*b>`. Drop the angle brackets and write the destination bare and the
+  identical escape is accepted, so the two spellings of the same destination disagree with
+  each other. Escapes are supposed to work in both: the parser already has machinery that
+  consumes a backslash together with the character after it, and a later stage resolves
+  those escapes before the URL is built. Only the angle-bracket branch refuses to take
+  part. Make it agree with its sibling, without loosening the terminators - an unescaped
+  `<`, a line ending or a NUL byte must still end the destination exactly as now, and a
+  destination that ends on a dangling backslash must still be rejected rather than reading
+  past the end of the input.
+
+repo:
+  root: repo/
+  loc: 255
+  entrypoint_hint: mistune/helpers.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_angle_link_href.py]
+  timeout_s: 60
+  n_tests: 17
+  floor_tests: 9
+
+constraints:
+  allowed_write_globs:
+    - "repo/mistune/helpers.py"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 25
+  max_tool_calls: 50
+
+provenance:
+  source: real_repo
+  origin: https://github.com/lepture/mistune @ e12f0d38d028a297ffd6c8bec9b5480627fe1903
+  license: BSD-3-Clause
+  notes: >
+    `src/mistune/helpers.py` and a trimmed `util.py` taken verbatim from the commit's
+    PARENT, so the defect is the upstream one. The gold patch is the commit's own change to
+    `_parse_angle_link_href`. Only the link-destination slice is kept, to stay inside the
+    task size budget.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-03
+  tags: [markdown, link-parsing, backslash-escape, commonmark]
