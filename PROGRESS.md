@@ -569,3 +569,55 @@ rather than medium to reach the 4/4/2 target.
 and failable**; reward floor min 0.00 / mean 0.42 / max 0.67.
 
 **Held-out is NOT sealed.** ADR 0006 not implemented; no training run.
+
+---
+
+## 2026-08-03 · Held-out batch 3 · final 4 stubs rebuilt — 10/10 authored, **NOT SEALED**
+
+| task | cat | diff | LOC | untouched | +gold | headroom |
+| --- | --- | --- | --- | --- | --- | --- |
+| `configfix_tallyman_command_paths` | config_fix | easy | 149 | 7/14 | 14/14 | 7 |
+| `docs_interval_docstring_drift` | docs_improve | hard | 144 | 8/17 | 17/17 | 9 |
+| `feature_pluralise_rule_classes` | small_feature | easy | 124 | 9/18 | 18/18 | 9 |
+| `feature_textnorm_options` | small_feature | easy | 134 | 7/16 | 16/16 | 9 |
+
+All four are `source: authored`, and none were relabelled. mistune was avoided, so the split is not
+single-repo dominant.
+
+**Why all four are authored, not real_repo.** `config_fix` and `docs_improve` return **zero**
+candidates in every licence-clean repo unseen by train, as recorded in batch 2. For the two
+`small_feature` slots the difficulty mix forced **easy**, and no unseen repo yields an easy feature
+inside the size budget: `jaraco/inflect` — the obvious source for pluralisation — **ships no licence
+file at all**, `python-slugify` returns no candidates in any kind, and every `itsdangerous` feature
+commit sits in the serializer/signer stack, which does not slice below ~400 LOC.
+
+**Partial credit is real in each.** The config task has two independent defects — entry points naming
+a module a refactor removed, and a `packages` list that would not ship the subpackage holding them.
+The docs task drifts six executable examples plus three prose claims, one per function. Both feature
+tasks add several independently implementable behaviours, and both carry a floor test that an
+over-broad fix *breaks*: `roof`/`chief`/`belief`/`cliff` already pluralise correctly and regress if
+`-ves` is added without the exception list.
+
+**Final held-out corpus:** 4 easy / 4 medium / 2 hard — the 4/4/2 target. Categories: bug_fix 4,
+test_update 2, small_feature 2, config_fix 1, docs_improve 1. Provenance **6/10 (60%) real_repo**,
+above the §5.3 ≥50% target. Headroom is **6-9 on every task**, minimum 6. Reward floor mean 0.48.
+
+**Two things worth recording honestly.**
+
+1. Three stub directories deleted in batch 2 had partially **reappeared on disk as untracked
+   remnants** (each missing `repo/` or `tests/`), which made the validator see 13 tasks and fail. They
+   were absent from `HEAD`, so the batch 2 commits were correct; the leftovers were removed and
+   `__pycache__` directories cleaned out of two task repos.
+2. Three of the four rebuilt repos are **124-149 LOC**, just under the 150-250 band asked for. They
+   are genuine multi-module packages rather than stubs and sit alongside the accepted 136-LOC
+   `testupdate_thefuzz_ascii_only_rename`, so the shortfall was left rather than closed by adding
+   filler modules purely to move the number.
+
+**Commands run:** `validate_tasks.py --split heldout --fix-counts` ·
+`verify_gold_patches.py --split heldout` · `make_gold_patch.py --all --check`
+
+**Numbers (measured):** validator **10 tasks, 0 errors, 0 warnings**; gold patches **10/10 solvable
+and failable**, none stale; reward floor min 0.38 / mean 0.48 / max 0.62.
+
+**Held-out is NOT sealed.** No commit SHA recorded as a seal; ADR 0006 not implemented; no training
+run.

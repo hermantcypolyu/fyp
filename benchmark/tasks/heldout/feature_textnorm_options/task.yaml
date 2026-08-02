@@ -1,0 +1,55 @@
+id: feature_textnorm_options
+category: small_feature
+difficulty: easy
+split: heldout
+
+instruction: >
+  `normalise` currently hard-codes one pipeline: lowercase, drop punctuation, join the
+  surviving word tokens with a single space. Callers need to vary three things about that
+  without reimplementing it, and the README's "Planned: normalisation options" table names
+  them and gives worked examples. Add those three keyword-only options. Each must default to
+  exactly today's behaviour, so that every existing call site is unaffected. They compose in
+  the documented order - the optional lowercasing happens first, then the optional accent
+  folding, then the join - and the folding itself already exists as a helper in this package,
+  so it should be reused rather than written again. Keep them keyword-only: `normalise` takes
+  one positional argument today and must keep taking exactly one.
+
+repo:
+  root: repo/
+  loc: 134
+  entrypoint_hint: textnorm/normalise.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_normalise_options.py]
+  timeout_s: 60
+  n_tests: 16
+  floor_tests: 7
+constraints:
+  allowed_write_globs:
+    - "repo/textnorm/normalise.py"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+    - "repo/textnorm/accents.py"
+    - "repo/textnorm/tokens.py"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: authored
+  license: MIT
+  notes: >
+    Authored. No licence-clean repo unseen by train yields a `feature` commit that fits an
+    easy slot inside the size budget: inflect ships no licence file at all, python-slugify
+    returns no candidates in any kind, and the itsdangerous feature commits all sit in the
+    serializer/signer stack, which does not slice below ~400 LOC. Marked authored rather
+    than forced.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-03
+  tags: [api-extension, keyword-only, defaults, text-normalisation]

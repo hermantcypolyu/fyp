@@ -1,8 +1,0 @@
-[project]
-name = "demo-pkg"
-version = "0.1.0"
-description = "A tiny demo package"
-requires-python = ">=3.10"
-
-[project.scripts]
-demo = "demo.commands:main"

@@ -1,0 +1,55 @@
+id: feature_pluralise_rule_classes
+category: small_feature
+difficulty: easy
+split: heldout
+
+instruction: >
+  The pluraliser only knows the generic suffix rules, so three classes of word come out
+  wrong. The README's "Planned" section lists all three and every word involved. Uncountable
+  nouns must come back untouched instead of collecting an `s`; a short table of irregular
+  forms must be looked up rather than derived; and words ending in `-f` or `-fe` must take
+  `-ves`, except for the four listed words that keep the plain `s` and already pluralise
+  correctly today. A leading capital must survive all three. None of this can be written as
+  a `SuffixRule`, so it belongs in the engine, resolved ahead of the generic rules and in the
+  order the README gives - but the generic rules must still handle everything they handle
+  now, and the words that already come out right must not regress.
+
+repo:
+  root: repo/
+  loc: 124
+  entrypoint_hint: plural/engine.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_rule_classes.py]
+  timeout_s: 60
+  n_tests: 18
+  floor_tests: 9
+constraints:
+  allowed_write_globs:
+    - "repo/plural/engine.py"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+    - "repo/plural/rules.py"
+    - "repo/plural/detect.py"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: authored
+  license: MIT
+  notes: >
+    Authored. The obvious real source for this behaviour is jaraco/inflect, which ships no
+    licence file at all - `mine_commits.py` reports "no licence file found - DO NOT USE" -
+    so it cannot supply a redistributable task. No other repo unseen by train yields a
+    `feature` candidate that fits an easy slot inside the size budget. Marked authored
+    rather than relabelled.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-03
+  tags: [rule-engine, lookup-table, exception-list, pluralisation]

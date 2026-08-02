@@ -1,0 +1,55 @@
+id: configfix_tallyman_command_paths
+category: config_fix
+difficulty: easy
+split: heldout
+
+instruction: >
+  Both console scripts this project installs are dead. The command implementations were
+  split out of a single module into one module per command under tallyman/commands/, and
+  the packaging metadata never followed: the entry points still name the module that split
+  was replacing, so an installed `tally` or `tally-report` fails at the import step before
+  it runs any code. The library itself is fine and the README describes what each command
+  does. There is a second, quieter half to this: the declaration of which packages ship
+  lists only the top-level one, so even once the entry points name the right modules, the
+  directory those modules live in would be absent from an install. Fix the metadata so both
+  documented commands resolve to the callables that back them and so the code they resolve
+  to would actually be installed. Do not move the implementations back.
+
+repo:
+  root: repo/
+  loc: 149
+  entrypoint_hint: pyproject.toml
+
+verification:
+  runner: pytest
+  test_files: [tests/test_command_paths.py]
+  timeout_s: 60
+  n_tests: 14
+  floor_tests: 7
+constraints:
+  allowed_write_globs:
+    - "repo/pyproject.toml"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+    - "repo/tallyman/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: authored
+  license: MIT
+  notes: >
+    Authored. `config_fix` could not be filled from a real commit: mining `bug_fix`,
+    `feature`, `config`, `docs` and `api_change` across every licence-clean repo unseen by
+    train (python-slugify, itsdangerous, thefuzz, mistune) returned no `config` candidate,
+    and the one near miss, mistune 2f2449dd0ab1, is not extractable inside the size budget.
+    Marked authored rather than relabelled.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-03
+  tags: [packaging, entry-points, subpackage-discovery, refactor-drift]

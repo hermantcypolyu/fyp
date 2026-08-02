@@ -1,0 +1,57 @@
+id: docs_interval_docstring_drift
+category: docs_improve
+difficulty: hard
+split: heldout
+
+instruction: >
+  The docstrings in intervals/core.py are the only API documentation this package ships,
+  and they have fallen behind the code. The worked examples are written in doctest form, so
+  each one is a claim that can be checked by running it - and they were last touched before
+  the unit handling was reworked, when the formatter emitted long unit names and the
+  splitter returned a preformatted string. Several examples now print something the code
+  never produces. Some of the surrounding prose is wrong in a different way: one function
+  documents a keyword argument under a name it does not have, one describes a return value
+  of the wrong type, and one promises a None that the code cannot return. Bring the
+  documentation back in line with the behaviour. The code is correct and is covered by its
+  own tests, so the examples and the descriptions are what must move - do not adjust the
+  implementation to make a stale example true, and do not delete an example rather than
+  correct it.
+
+repo:
+  root: repo/
+  loc: 144
+  entrypoint_hint: intervals/core.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_docstrings.py]
+  timeout_s: 60
+  n_tests: 17
+  floor_tests: 8
+constraints:
+  allowed_write_globs:
+    - "repo/intervals/core.py"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+    - "repo/intervals/units.py"
+  max_turns: 25
+  max_tool_calls: 50
+
+provenance:
+  source: authored
+  license: MIT
+  notes: >
+    Authored. `docs_improve` could not be filled from a real commit: mining the `docs` kind
+    across every licence-clean repo unseen by train (python-slugify, itsdangerous, thefuzz,
+    mistune) returned no candidate at all. Marked authored rather than relabelled. The
+    drift pattern - executable examples left behind by a rework, plus prose contradicting
+    the signature - is the shape docstring rot actually takes.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-03
+  tags: [docstrings, doctest, signature-drift, documentation-rot]

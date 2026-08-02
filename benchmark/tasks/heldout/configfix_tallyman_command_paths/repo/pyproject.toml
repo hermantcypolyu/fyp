@@ -1,0 +1,16 @@
+[project]
+name = "tallyman"
+version = "0.3.0"
+description = "Tally simple category/amount ledgers"
+requires-python = ">=3.10"
+
+[project.scripts]
+tally = "tallyman.cli:main"
+tally-report = "tallyman.cli:report"
+
+[tool.setuptools]
+packages = ["tallyman"]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
