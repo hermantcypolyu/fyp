@@ -1,0 +1,73 @@
+id: testupdate_rpartial_rcurry_rename
+category: test_update
+difficulty: medium
+split: heldout
+
+instruction: >
+  Two of the helpers in funcy/simple_funcs.py were renamed in the last release. They are the
+  pair that binds arguments from the right instead of the left - one is the
+  partial-application variant, the other the currying variant - and both used to carry a
+  "back"-flavoured name that read as if it walked backwards through a call rather than
+  saying which end of the argument list it fixes. The release settled on the r-prefixed
+  spelling used elsewhere for reversed variants, and kept no aliases; that is deliberate and
+  the library is correct as shipped. What is stale is the project's own suite at
+  tests/test_funcs.py, which still calls the old names and now fails. Bring that suite up to
+  date, keeping the same breadth of coverage: every case those two tests exercised must
+  still be exercised afterwards, including the three-argument currying case that is the one
+  showing the arguments really do arrive in reverse order.
+
+repo:
+  root: repo/
+  loc: 223
+  entrypoint_hint: tests/test_funcs.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_funcs_suite.py]
+  timeout_s: 180
+  n_tests: 13
+  floor_tests: 6
+
+constraints:
+  allowed_write_globs:
+    - "repo/tests/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+    - "repo/funcy/**"
+  max_turns: 25
+  max_tool_calls: 50
+
+provenance:
+  source: real_repo
+  origin: https://github.com/Suor/funcy @ 4b0bcd6448c35c794e22c8adc2310b92a962c94d
+  license: BSD-3-Clause
+  notes: >
+    Upstream commit 4b0bcd6448c3 (2015-02-02), "Rename back_partial -> rpartial, backcurry
+    -> rcurry". The direction of extraction is reversed from a bug-fix task and that is the
+    point: funcy/simple_funcs.py is taken from the COMMIT, so the library is correct, and
+    the project's suite is taken from its PARENT, so the stale suite is the one that really
+    existed. The reference solution is exactly what the maintainer committed to the suite -
+    the four call sites inside test_back_partial and test_backcurry, and nothing else; he
+    left the two test functions under their old names, so the hidden suite checks which
+    names the suite *calls*, via the parsed syntax tree, rather than grepping raw text, and
+    an agent that also renames the two test functions passes just the same. Reductions to
+    fit the size budget and to run on Python 3.12: simple_funcs.py, funcs.py, cross.py and
+    primitives.py are upstream's at that commit, byte-identical; funcy/funcmakers.py is
+    replaced by a small shim providing only make_func/make_pred for callables, None,
+    indices, mappings and sets, because upstream's pulls in funcy.strings for its regex
+    branch; funcy/__init__.py is a reduced re-export. The visible suite carries upstream's
+    assertions, with three adaptations forced by the reduction - upstream's
+    `from whatever import _` placeholders become plain lambdas (whatever is a third-party
+    package), the compose case built from a regex string is dropped along with the
+    funcmakers branch that implements it, and test_flip is dropped because flip lives in
+    funcy/colls.py, which this extract does not carry. repo/ comes to 249 lines: a
+    test_update repo has to carry both a library and a suite worth updating.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-02
+  tags: [api-migration, test-maintenance, rename, real-repo, funcy]

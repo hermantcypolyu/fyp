@@ -1,0 +1,74 @@
+id: bugfix_image_alt_double_escape
+category: bug_fix
+difficulty: easy
+split: heldout
+
+instruction: >
+  Images render with a mangled alt attribute. When a caption contains a character HTML
+  reserves - an ampersand, an angle bracket, a quotation mark - the attribute comes back
+  with the encoding applied twice, so a caption of "dogs & cats" reaches the browser as
+  "dogs &amp;amp; cats" and is shown to the reader as the literal text "dogs &amp; cats";
+  an entity the author typed by hand suffers the same fate. Emphasis, links and code spans
+  are unaffected, and the src and title attributes of the very same tag come out right, so
+  the fault is confined to the way alt is assembled in mistune/renderers/html.py. Correct
+  it so the alt text carries exactly the encoding the rendering pipeline has already
+  applied to that text, no more and no less. The attribute must stay safe and stay an
+  attribute: no raw <, > or " may appear inside it, and any inline tags in the caption must
+  still be stripped out rather than shown. Nothing else may change - not the public
+  signatures, not the other renderer methods, and not the escaping helpers in
+  mistune/util.py, which several of those other methods still depend on.
+
+repo:
+  root: repo/
+  loc: 234
+  entrypoint_hint: mistune/renderers/html.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_image_alt.py]
+  timeout_s: 60
+  n_tests: 13
+  floor_tests: 5
+
+constraints:
+  allowed_write_globs:
+    - "repo/mistune/**"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 20
+  max_tool_calls: 40
+
+provenance:
+  source: real_repo
+  origin: https://github.com/lepture/mistune @ 0d6f3d850283d51e9c60e5a1b3c9343a18df3722
+  license: BSD-3-Clause
+  notes: >
+    Upstream commit 0d6f3d850283 (2026-04-13), "fix: remove double-encoding of image alt
+    text", a one-line change to HTMLRenderer.image() in src/mistune/renderers/html.py.
+    repo/mistune/renderers/html.py is that file at the commit's PARENT, byte-identical, so
+    the redundant escape_text() call is the code that really shipped; solution/fixed/ holds
+    the same file at the commit itself, so the gold patch is the contributor's actual fix.
+    Vendoring the whole parser was not viable inside the size budget, so only the renderer
+    layer is present. src/mistune/util.py keeps escape, safe_entity, unescape and striptags
+    (the helpers html.py imports) and drops expand_leading_tab, expand_tab, escape_url,
+    unikey and strip_end together with the typing and urllib imports only they used.
+    src/mistune/core.py keeps BlockState and BaseRenderer verbatim and drops InlineState,
+    Parser and BlockState's cursor and paragraph helpers, along with the re, sys and
+    typing_extensions imports that went with them. Everything retained is byte-identical to
+    upstream. Two files are not upstream code: repo/mistune/__init__.py is a written-here
+    three-symbol re-export shim, because upstream's __init__ builds the parser that is not
+    vendored, and repo/README.md is written for this task. The block and inline parsers,
+    the plugins, the Markdown/RST/JSON renderers and the directives are all absent.
+    Upstream's assertions for this commit live in tests/test_misc.py and parse markdown end
+    to end; with no parser here the hidden suite drives HTMLRenderer.image() directly with
+    the pre-escaped strings the pipeline would hand it, and adds cases of the same kind
+    covering the other reserved characters, tag stripping and the alt/src/title split.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-02
+  tags: [html-escaping, double-encoding, renderer, real-repo, mistune]

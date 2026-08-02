@@ -427,6 +427,22 @@ def check_behaviour(task: Task, report: Report, *, fix: bool = False) -> None:
                 f"Set n_tests: {without.collected}",
             )
 
+    # The reward floor, as a count. Measurement only - reward_v1 is untouched, and ADR 0006's
+    # normalisation is still Proposed. Recording it now means the number that a future
+    # normalisation would divide by is a checked measurement rather than something an author
+    # typed, and it makes "how much headroom does this task have" answerable from task.yaml.
+    declared_floor = task.data.get("verification", {}).get("floor_tests")
+    if declared_floor is not None and declared_floor != without.passed:
+        if fix and rewrite_scalar(task, r"^(\s*floor_tests:\s*)\d+\s*$", without.passed):
+            report.note(f"{tid}: verification.floor_tests {declared_floor} -> {without.passed}")
+        else:
+            report.error(
+                "FLOOR",
+                tid,
+                f"verification.floor_tests is {declared_floor}, the untouched repo passes {without.passed}",
+                f"Set floor_tests: {without.passed}",
+            )
+
     if without.all_passed:
         report.error(
             "NOT_FAILABLE",

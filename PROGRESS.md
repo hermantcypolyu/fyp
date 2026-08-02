@@ -427,3 +427,50 @@ committed because the `.jsonl` is correctly gitignored).
 **Next:** B4 — `rewards/components.py` and `compose.py` (reward_v1 + the gates as pure, unit-tested
 functions), `analysis/metrics.py` (pass@k + bootstrap CI), `analysis/failure_taxonomy.py`, and
 `docs/reward_design.md`.
+
+---
+
+## 2026-08-02 · Held-out batch 1 · 3 of 10 tasks — **NOT SEALED**
+
+| task | cat | diff | untouched | +gold | floor | headroom |
+| --- | --- | --- | --- | --- | --- | --- |
+| `bugfix_image_alt_double_escape` | bug_fix | easy | 5/13 | 13/13 | 0.38 | 8 |
+| `bugfix_retry_base_composition` | bug_fix | medium | 6/14 | 14/14 | 0.43 | 8 |
+| `testupdate_rpartial_rcurry_rename` | test_update | medium | 6/13 | 13/13 | 0.46 | 7 |
+
+All three `source: real_repo`, from upstream commits, extracted in the same direction as the train
+corpus (buggy file from the commit's **parent** for bug_fix; correct library from the **commit** and
+stale suite from the **parent** for test_update).
+
+**`verification.floor_tests` added to the schema — measurement only.** It records how many hidden
+tests already pass against the untouched repo. `validate_tasks.py` checks it when present and
+`--fix-counts` writes it, so it is a *checked measurement* rather than a number an author typed.
+`reward_v1` is unchanged and ADR 0006 remains **Proposed** — nothing normalises against this yet.
+It is optional, so the 26 train tasks are unaffected; they get backfilled in B4.
+
+Every task clears the ≥6 headroom bar (8 / 8 / 7). Floors sit at 0.38–0.46 against the train mean of
+0.46, so the held-out split is not systematically easier or harder — which is the point of §5.4
+rule 7.
+
+**One subagent claim I checked and had to correct.** The `test_update` author reported that
+`thefuzz` is GPL-2 and that `mine_commits.py` misreports it as MIT. `_vendor/mining/thefuzz/
+LICENSE.txt` reads `MIT License / Copyright (c) 2014 SeatGeek`. The tool was right; the report was
+wrong. Left unchecked, that would have removed a permissively-licensed repo from the pool for the
+remaining seven tasks.
+
+**Corpus after this batch:** 26 train + 3 held-out = **29 tasks, 0 errors**, all solvable and
+failable. `real_repo` up from 42% to **48%** (14/29). Held-out still needs: bug_fix 2, test_update 1,
+config_fix 1, small_feature 2, docs_improve 1 — and the difficulty spread needs the remaining slots
+to lean easy/hard, since the split is currently 1 easy / 2 medium / 0 hard against a 40/40/20 target.
+
+**Commands run:** `validate_tasks.py --all` · `verify_gold_patches.py --split heldout` ·
+`uv run pytest` · `uv run ruff check .`
+
+**Numbers (measured):** validator **29 tasks, 0 errors, 12 warnings** (all corpus-mix/provenance,
+expected at 3/10 held-out); gold patches **3/3 solvable and failable**; unit tests **168 passed,
+1 skipped**; ruff **0 findings**.
+
+**Artifacts:** `results/raw/b2_heldout/batch1.json`
+
+**Held-out is NOT sealed.** No commit SHA recorded here; the split stays open until all 10 are
+reviewed.

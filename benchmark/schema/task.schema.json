@@ -95,6 +95,12 @@
           "minimum": 3,
           "maximum": 40,
           "description": "Real collected test count - validate_tasks.py enforces it against pytest --collect-only. At least 3 so partial credit is real (5.4 rule 5); reward_v1 is a fraction of this."
+        },
+        "floor_tests": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 40,
+          "description": "MEASURED reward floor, as a count: how many hidden tests already pass against the untouched repo, i.e. what a do-nothing agent scores. Optional and purely descriptive today - reward_v1 is unchanged and ADR 0006's normalisation is still Proposed. validate_tasks.py checks it when present and --fix-counts writes it, so it is a checked measurement rather than an author's guess. Headroom is n_tests - floor_tests; below ~6 the task discriminates poorly."
         }
       }
     },

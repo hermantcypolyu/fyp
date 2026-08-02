@@ -1,0 +1,74 @@
+id: bugfix_retry_base_composition
+category: bug_fix
+difficulty: medium
+split: heldout
+
+instruction: >
+  Combining a retry condition with an ordinary function stopped working. When the left
+  operand is a strategy and the right operand is a plain callable taking a RetryCallState -
+  retry_if_result(...) | my_predicate, or the same with & - the expression raises
+  AttributeError saying a function object has no __ror__ or __rand__, so the condition dies
+  where it is written rather than when it is evaluated. Putting the plain callable on the
+  left still works, and combining two strategies with each other still works. Make both
+  orders build the same kind of combined condition: | an any-of combination and & an all-of
+  one, with the operands stored in the order they were written and every operand consulted
+  when the combination is called. Nothing else may change - the public names and signatures
+  in tenacity/retry.py stay as they are, strategy-to-strategy composition must keep behaving
+  exactly as it does now, and callers must not have to wrap a plain function in anything.
+
+repo:
+  root: repo/
+  loc: 149
+  entrypoint_hint: tenacity/retry.py
+
+verification:
+  runner: pytest
+  test_files: [tests/test_retry_composition.py]
+  timeout_s: 60
+  n_tests: 14
+  floor_tests: 6
+
+constraints:
+  allowed_write_globs:
+    - "repo/tenacity/retry.py"
+  forbidden_write_globs:
+    - "tests/**"
+    - "solution/**"
+    - "**/conftest.py"
+    - "task.yaml"
+    - "repo/smoke/**"
+  max_turns: 25
+  max_tool_calls: 50
+
+provenance:
+  source: real_repo
+  origin: https://github.com/jd/tenacity @ a02b51a20fbda8fcc9051b10bad4a728882a631c
+  license: Apache-2.0
+  notes: >
+    Upstream commit a02b51a20fbd (2026-02-24), "fix: restore plain function composition
+    with retry_base via | and &" (#606, fixes issue #481). repo/tenacity/retry.py is taken
+    from that commit's PARENT, so the unguarded other.__rand__/other.__ror__ delegation is
+    the code that really shipped; solution/fixed/tenacity/retry.py is the same file at the
+    commit itself, so the gold patch is the maintainer's actual fix - the isinstance guard
+    plus the RetryBaseT annotation widening that goes with it. Upstream retry.py is 271
+    lines covering eleven strategies; retry_if_not_exception_type,
+    retry_unless_exception_type, retry_if_exception_cause_type, retry_if_exception_message
+    and retry_if_not_exception_message were removed with benchmark/tools/trim_module.py to
+    fit the size budget, which left "import re" unused, so that import went too. The
+    licence header, the remaining imports and every retained definition are byte-identical
+    to upstream apart from the TYPE_CHECKING import, which now reads "from
+    tenacity.retry_state import RetryCallState": upstream's RetryCallState and Future live
+    in a 700-line tenacity/__init__.py alongside the Retrying engine, so
+    repo/tenacity/retry_state.py is a hand-written shim carrying only the attributes the
+    strategies read (outcome, attempt_number, and Future.failed / result / exception /
+    construct). That shim and repo/tenacity/__init__.py are the only files here that are
+    not upstream code. The hidden suite is modelled on the two unittest cases the commit
+    added to tests/test_tenacity.py, split into behaviour-sized tests so partial credit is
+    meaningful and extended with the reflected-order and strategy-to-strategy cases that
+    already pass, so that a fix which trades one direction for the other does not score
+    full marks.
+
+metadata:
+  expected_files_changed: 1
+  created: 2026-08-02
+  tags: [operator-overloading, dunder-dispatch, composition, real-repo, tenacity]
