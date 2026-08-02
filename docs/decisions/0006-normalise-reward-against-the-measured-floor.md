@@ -149,6 +149,20 @@ submitting immediately, and the deterrent evaporates. Recommend gates yield **$-
 strictly below any achievable normalised score. Whatever we choose, the gate constant must be
 defined relative to the normalised scale, not left at its old absolute value.
 
+> **Coupling constraint — binding, not advisory.** Normalisation and the gate constant are **one
+> change, and must land in a single commit.** Shipping the formula while leaving gates at `0.0`
+> creates a window in which writing to `tests/**` and doing nothing score *identically* (both
+> `0.0`), which silently removes the only deterrent against the #1 reward hack. The failure is
+> invisible: nothing errors, no test goes red, and the gate-rate metric keeps logging hits while
+> the reward stops caring about them. Any run performed inside that window is unusable and would
+> have to be discarded, because its rewards cannot be reinterpreted after the fact.
+>
+> Two mechanical safeguards, to be added with the implementation:
+> - `rewards/compose.py` derives the gate constant from the same module-level scale definition as
+>   the formula, so the two cannot be changed independently.
+> - A unit test asserts `gate_reward < normalised_reward(p=c)` — that is, a gated rollout is
+>   strictly worse than a do-nothing rollout — which fails loudly if either lands alone.
+
 **(c) Granularity gets worse on the tasks with the highest floors.** Normalisation rescales but
 cannot create resolution. `bugfix_intword_power_rollover` has 4 movable tests out of 9, so its
 normalised reward takes only 5 distinct values $\{0, 0.25, 0.5, 0.75, 1\}$; five tasks have 5
@@ -192,7 +206,9 @@ pass fraction as specified in §5.7, and B2's numbers are unaffected.
 Three things need an explicit yes/no, because they amend the spec rather than merely add to it:
 
 1. Reward range extends from $[0,1]$ to $[-1,1]$ (consequence (a)).
-2. Hard-zero gates yield $-1.0$ rather than $0.0$ (consequence (b)).
+2. Hard-zero gates yield $-1.0$ rather than $0.0$ (consequence (b)). **Items 1 and 2 are coupled:
+   approving normalisation without the gate move is not a partial approval, it is a regression —
+   see the coupling constraint above. They ship together or not at all.**
 3. `task.yaml` gains a second validator-measured field (`floor_tests`).
 
 ## Consequences if accepted

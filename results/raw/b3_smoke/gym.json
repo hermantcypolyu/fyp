@@ -1,0 +1,123 @@
+{
+  "transport": "gym",
+  "tasks": {
+    "bugfix_metric_zero_domain_error": {
+      "transcript": [
+        {
+          "tool": "list_files",
+          "ok": true,
+          "output": "repo/\nsmoke/\nrepo/humanize/\nrepo/humanize/__init__.py\nrepo/humanize/number.py\nsmoke/test_smoke_number.py"
+        },
+        {
+          "tool": "read_file",
+          "ok": true,
+          "output": "repo/humanize/number.py lines 1-138 of 138\n    1 | #!/usr/bin/env python\n    2 | \n    3 | \"\"\"Humanizing functions for numbers.\"\"\"\n    4 | from __future__ import annotations\n    5 | \n    6 | import mat"
+        },
+        {
+          "tool": "write_file",
+          "ok": true,
+          "output": "Wrote 138 lines to repo/humanize/number.py."
+        },
+        {
+          "tool": "run_tests",
+          "ok": true,
+          "output": "2/2 passed (smoke tests only; these are not the grading tests)"
+        },
+        {
+          "tool": "submit",
+          "ok": true,
+          "output": "Submitted. The episode is over."
+        }
+      ],
+      "result": {
+        "responses_create_params": {
+          "background": null,
+          "include": null,
+          "input": [
+            {
+              "content": "metric() blows up on a value of zero. Instead of returning a formatted string it raises ValueError with a math domain error, because the exponent that chooses the SI prefix is taken from the base-10 logarithm of the magnitude, and that is undefined at zero. Any caller rendering a series of readings therefore dies the moment one of them is zero, in every mode - with a unit, without one, and at any precision. Fix humanize/number.py so zero renders the way any other value needing no prefix does: the mantissa formatted to the requested precision, no prefix letter, and the unit appended under the usual spacing rule, which omits the space for a degree sign. That means a constant string is not an acceptable answer, because the precision and the unit both still have to be honoured. Nothing else may change: values that already format correctly, including the fallback to scientific notation beyond the prefix range, must be left exactly as they are, and the public signature must stay as it is.\n",
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "metadata": null,
+          "model": null,
+          "parallel_tool_calls": true,
+          "previous_response_id": null,
+          "prompt": null,
+          "reasoning": null,
+          "service_tier": null,
+          "store": null,
+          "temperature": null,
+          "text": null,
+          "tool_choice": "auto",
+          "tools": [],
+          "top_logprobs": null,
+          "top_p": null,
+          "truncation": null,
+          "user": null,
+          "stream": null
+        },
+        "response": {
+          "id": "resp_smoke",
+          "created_at": 0.0,
+          "error": null,
+          "incomplete_details": null,
+          "instructions": null,
+          "metadata": null,
+          "model": "smoke",
+          "object": "response",
+          "output": [],
+          "parallel_tool_calls": false,
+          "temperature": null,
+          "tool_choice": "auto",
+          "tools": [],
+          "top_p": null,
+          "background": null,
+          "conversation": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "previous_response_id": null,
+          "prompt": null,
+          "prompt_cache_key": null,
+          "reasoning": null,
+          "safety_identifier": null,
+          "service_tier": null,
+          "status": null,
+          "text": null,
+          "top_logprobs": null,
+          "truncation": null,
+          "usage": null,
+          "user": null
+        },
+        "reward": 1.0,
+        "pass_fraction": 1.0,
+        "tests_passed": 12,
+        "tests_total": 12,
+        "gates": [],
+        "submitted": true,
+        "tool_calls": 5,
+        "limits_enforced": {
+          "wall_clock_s": true,
+          "network": true,
+          "cpu_s": false,
+          "memory_mb": false,
+          "max_file_mb": false,
+          "max_processes": false
+        },
+        "task_id": "bugfix_metric_zero_domain_error",
+        "split": "train",
+        "metadata": {
+          "task_id": "bugfix_metric_zero_domain_error",
+          "split": "train",
+          "max_turns": "20",
+          "max_tool_calls": "40"
+        }
+      },
+      "live_sessions": 0
+    }
+  }
+}

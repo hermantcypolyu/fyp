@@ -266,3 +266,77 @@ after every attack vector fires.
 
 **Next:** B3 batch 3 — resources server (`POST /verify`) and the agent harness as a thin subclass of
 NeMo Gym's `simple_agent`.
+
+---
+
+## 2026-08-02 · B3 batch 3 · Resources server, agent harness, and two follow-ups
+
+### Follow-ups from batch 2
+
+**1. `test_count_mismatch` is now a hard gate.** If the graded run collects a different number of
+tests than `task.yaml` declares, the episode is invalid: reward 0, recorded. `reward_v1` is a
+*fraction*, so shrinking the denominator pays exactly as well as passing tests — a skip mark, a
+collection hook, an early `sys.exit`, a deleted parametrize case. Pinning the denominator to the
+number in git makes all of them worth zero without enumerating them, which is strictly better than
+`_has_injected_hook` catching the one instance it recognises. It also catches a stale `n_tests`,
+which is the same failure wearing a different hat. Verified the gate cannot misfire:
+`validate_tasks.py --all` reports **26 tasks, 0 errors**, and it has an `N_TESTS` check that
+compares the declared count against a real pytest run.
+
+**2. ADR 0006 now states the coupling as binding.** Normalisation and moving the gate constant to
+−1.0 must land in **one commit**. Shipping the formula alone creates a window where writing to
+`tests/**` and doing nothing both score `0.0` — the deterrent for the #1 reward hack silently
+disappears, nothing errors, no test goes red, and every run made in that window is unusable. Two
+mechanical safeguards are specified with it: the gate constant derives from the same scale
+definition as the formula, and a unit test asserts `gate_reward < normalised_reward(p=c)`.
+
+### Batch 3 proper
+
+**Where the logic lives.** `nemo_gym/server_utils.py` has a top-level `import resource`, so
+`app.py` needs POSIX or B0's out-of-tree `_vendor/win_compat` shim — neither of which `uv sync`
+provides. So `envs/coding_env/session.py` holds *all* the server's behaviour, framework-free and
+covered by 21 tests, and `app.py` is a routing table over it. `envs/tests/test_server_contract.py`
+then checks `app.py` and `agent.py` with `ast` rather than importing them: six routes named exactly
+as the tool schema says, no second scoring path, no loop in the agent subclass.
+
+**But the server was not left as a claim.** `scripts/smoke_one_task.py --transport gym` builds the
+real FastAPI app and drives `/seed_session → six tool routes → /verify` through Starlette's
+TestClient, using the vendored Python 3.12.10 and the shim. **reward 1.00, 12/12, 0 gates, 5 tool
+calls, 0 live sessions afterwards** — byte-identical to the same episode via `--transport direct`.
+That is §5.6's single-verifier invariant demonstrated rather than asserted: both transports reach
+`EpisodeSession.grade()`, which calls `verifier.verify()` once and caches, so eval and reward
+cannot disagree even in principle.
+
+**The agent is genuinely thin.** `CodingAgent` overrides exactly one method and contains no loop —
+a test asserts both. Its only job is the thing the built-in cannot do: `simple_agent` reads its step
+cap from process-wide config, while our corpus varies `max_turns` per task (**20 / 25 / 30**, and
+`max_tool_calls` **40 / 50 / 60** — measured, not assumed). It reads the per-rollout cap from the
+row's `metadata` and hands the built-in loop a *config copy* carrying it; a copy rather than a
+mutation, because one server object serves concurrent rollouts and assignment would leak one task's
+budget into another's.
+
+**Budgets are enforced in different places, deliberately.** `max_tool_calls` is server-side, because
+an agent must not be able to opt out of an environment limit and only the resources server sees
+every call. `max_turns` is agent-side, because a turn is a loop iteration and only the loop can
+count them.
+
+**`make smoke` now exists.** The Makefile has referenced `scripts/smoke_one_task.py` since B0; it is
+written. The "agent" is scripted — it writes the gold solution *through the real `write_file` tool*
+— because a model would test the model, whereas this tests the environment.
+
+**One correction to batch 2's write-up:** I claimed `nemo_gym` "cannot be imported on Windows at
+all". With B0's shim it can, and now demonstrably does. The docstrings that said otherwise are
+fixed.
+
+**Commands run:** `uv run pytest` · `uv run ruff check .` · `validate_tasks.py --all` ·
+`smoke_one_task.py --task bugfix_metric_zero_domain_error` (both transports)
+
+**Numbers (measured):** **147 passed, 1 skipped** (48 new); ruff **0 findings**; validator **26
+tasks, 0 errors, 5 warnings** (the known mix/provenance gaps). Smoke: **1.00 / 12 of 12** on both
+transports. `limits_enforced` on the HTTP result reports `wall_clock_s` and `network` true,
+the four `setrlimit` caps false — correct for Windows.
+
+**Artifacts:** `results/raw/b3_smoke/{direct,gym}.json`
+
+**Next:** B3 batch 4 — trace persistence per `analysis/trace_schema.json`, pinned SHAs for
+`_vendor/nemo-gym` and NeMo RL, and `docs/SETUP_NEW_MACHINE.md`.

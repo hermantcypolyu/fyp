@@ -22,6 +22,7 @@ from envs.coding_env.tools import GATE_TESTS_MODIFIED
 from envs.coding_env.verifier import (
     GATE_NO_SUBMIT,
     GATE_SYNTAX_BROKEN,
+    GATE_TEST_COUNT_MISMATCH,
     GATE_TIMEOUT,
     verify,
     verify_sandbox,
@@ -127,6 +128,29 @@ def test_timeout_is_a_scored_failure_not_an_error(sb):
     assert result.timed_out
     assert result.gates == [GATE_TIMEOUT]
     assert result.reward == 0.0
+
+
+@pytest.mark.slow
+def test_test_count_mismatch_zeroes_even_a_perfect_run(sb):
+    """The denominator is pinned to task.yaml, so shrinking it cannot pay.
+
+    Simulated by declaring a count the pristine suite cannot produce - the same signal a
+    collection hook, a skip mark or an early `sys.exit` would generate.
+    """
+    fresh = load_task(TASKS_ROOT / "train" / TASK_ID)
+    fresh.data["verification"]["n_tests"] = 999
+    _solve(sb)
+    result = verify(fresh, sb.repo_dir, submitted=True)
+    assert GATE_TEST_COUNT_MISMATCH in result.gates
+    assert result.reward == 0.0
+    assert result.pass_fraction == 1.0  # the work was right; the run was still invalid
+
+
+@pytest.mark.slow
+def test_declared_count_matches_reality_for_the_smoke_task(sb):
+    """Guards the gate itself: a stale n_tests would zero every episode on that task."""
+    sb.toolbox.submit()
+    assert verify_sandbox(sb).collected == sb.task.n_tests
 
 
 # --------------------------------------------------------------------------- limits

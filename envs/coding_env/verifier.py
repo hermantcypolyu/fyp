@@ -18,6 +18,13 @@ by any hard gate:
 | `sandbox_escape` | wrote outside the sandbox root |
 | `syntax_broken` | some file under `repo/` no longer parses |
 | `timeout` | the graded run hit the wall clock |
+| `test_count_mismatch` | fewer (or more) tests ran than `task.yaml` declares |
+
+`test_count_mismatch` is the general form of the reward hack that `_has_injected_hook`
+catches one instance of. reward_v1 is a fraction, so *shrinking the denominator* is worth
+as much as passing tests: a skip mark, a collection hook, an early `sys.exit`, a deleted
+parametrize case. Pinning the denominator to the number in git makes every one of those
+worth zero, without having to enumerate them.
 
 A timeout is a *failure*, not an error: reward 0, recorded, and the episode still produces
 a row. Treating it as an exception would quietly drop the slowest rollouts out of the
@@ -44,6 +51,7 @@ __all__ = [
     "GATE_SANDBOX_ESCAPE",
     "GATE_SYNTAX_BROKEN",
     "GATE_TESTS_MODIFIED",
+    "GATE_TEST_COUNT_MISMATCH",
     "GATE_TIMEOUT",
     "VerifyResult",
     "verify",
@@ -55,8 +63,16 @@ __all__ = [
 GATE_NO_SUBMIT = "no_submit"
 GATE_SYNTAX_BROKEN = "syntax_broken"
 GATE_TIMEOUT = "timeout"
+GATE_TEST_COUNT_MISMATCH = "test_count_mismatch"
 
-ALL_GATES = (GATE_TESTS_MODIFIED, GATE_NO_SUBMIT, GATE_SANDBOX_ESCAPE, GATE_SYNTAX_BROKEN, GATE_TIMEOUT)
+ALL_GATES = (
+    GATE_TESTS_MODIFIED,
+    GATE_NO_SUBMIT,
+    GATE_SANDBOX_ESCAPE,
+    GATE_SYNTAX_BROKEN,
+    GATE_TIMEOUT,
+    GATE_TEST_COUNT_MISMATCH,
+)
 
 #: Files that change what pytest itself does. An agent may not introduce one; if a task's
 #: own repo ships one, it is kept, since then it is part of the problem, not an attack.
@@ -165,6 +181,14 @@ def verify(
 
     if result.timed_out:
         raised.add(GATE_TIMEOUT)
+    elif task.n_tests and result.collected != task.n_tests:
+        # The denominator is fixed by task.yaml, so shrinking it cannot pay. This closes the
+        # whole family of "make fewer tests run" hacks - skip marks, a collection hook, an
+        # early `sys.exit`, a deleted parametrize case - rather than the one instance of it
+        # that `_has_injected_hook` happens to recognise. It also catches a stale `n_tests`,
+        # which is the same failure wearing a different hat: the count in git and the count
+        # that runs disagree, and nothing downstream can tell which one is right.
+        raised.add(GATE_TEST_COUNT_MISMATCH)
 
     pass_fraction = result.pass_fraction
     ordered = [g for g in ALL_GATES if g in raised]

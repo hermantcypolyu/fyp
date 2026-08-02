@@ -1,0 +1,44 @@
+# NeMo Gym wiring for the coding environment.
+#
+# Shape copied from nemo-gym/resources_servers/example_multi_step/configs/example_multi_step.yaml
+# @ commit ec5a8136046aa0dd0c1525313654502f2fb7c42e. The agent block points at our thin
+# SimpleAgent subclass rather than the built-in, because the built-in's step cap is
+# process-wide and our per-task max_turns is not (see envs/coding_env/agent.py).
+#
+# The dataset JSONL files are built in B4 from benchmark/tasks/** - one row per task,
+# carrying the instruction, the six tool schemas, and constraints.max_turns in `metadata`.
+
+coding_env_resources_server:
+  resources_servers:
+    coding_env:
+      entrypoint: envs/coding_env/app.py
+      domain: code
+      verified: false
+      description: >
+        Small-repo software engineering with six tools. Reward is the fraction of a hidden
+        pytest suite passing after the agent submits, zeroed by the 5.7 gates. The hidden
+        suite is never materialised in the agent's sandbox.
+      # None -> a temp directory per rollout, removed when /verify returns.
+      sandbox_root: null
+
+coding_env_agent:
+  responses_api_agents:
+    coding_agent:
+      entrypoint: envs/coding_env/agent.py
+      resources_server:
+        type: resources_servers
+        name: coding_env_resources_server
+      model_server:
+        type: responses_api_models
+        name: policy_model
+      # Backstop only. The real per-task cap rides on each row's metadata.max_turns.
+      max_steps: 40
+      datasets:
+        - name: train
+          type: train
+          jsonl_fpath: benchmark/data/train.jsonl
+          license: MIT
+        - name: example
+          type: example
+          jsonl_fpath: benchmark/data/example.jsonl
+          license: MIT

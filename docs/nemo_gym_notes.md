@@ -274,8 +274,23 @@ Their own pytest suites also pass unmodified (`example_single_tool_call`, `examp
 That covers config validation, server construction, session middleware, tool routing, per-rollout
 state and the verifier — every surface we subclass.
 
-### Could not run here ❌
+### Our own environment, over HTTP ✅ (B3)
 
+`scripts/smoke_one_task.py --transport gym` builds `envs/coding_env/app.py`'s real FastAPI app
+and drives a full episode through it with Starlette's TestClient:
+`/seed_session` → `/list_files` → `/read_file` → `/write_file` → `/run_tests` → `/submit` →
+`/verify`. Run with the Python 3.12.10 interpreter in `_vendor/nemo-gym/.venv` and the
+`_vendor/win_compat` shim on `PYTHONPATH`.
+
+Result: **reward 1.00, 12/12 hidden tests, 0 gates, 5 tool calls, 0 live sessions afterwards** —
+identical to the same episode run with `--transport direct`, which is the §5.6 invariant holding in
+practice rather than by assertion. Output:
+[results/raw/b3_smoke/gym.json](../results/raw/b3_smoke/gym.json).
+
+So the resources server, the session middleware and `POST /verify` **are** verified on this
+machine. What is still unverified is the multi-process orchestration below.
+
+### Could not run here ❌
 `gym env start` boots a Ray cluster, and **Ray's raylet does not start on native Windows**:
 
 ```

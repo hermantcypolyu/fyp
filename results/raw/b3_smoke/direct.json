@@ -1,0 +1,66 @@
+{
+  "transport": "direct",
+  "tasks": {
+    "bugfix_metric_zero_domain_error": {
+      "transcript": [
+        {
+          "tool": "list_files",
+          "ok": true,
+          "output": "repo/\nsmoke/\nrepo/humanize/\nrepo/humanize/__init__.py\nrepo/humanize/number.py\nsmoke/test_smoke_number.py"
+        },
+        {
+          "tool": "read_file",
+          "ok": true,
+          "output": "repo/humanize/number.py lines 1-138 of 138\n    1 | #!/usr/bin/env python\n    2 | \n    3 | \"\"\"Humanizing functions for numbers.\"\"\"\n    4 | from __future__ import annotations\n    5 | \n    6 | import mat"
+        },
+        {
+          "tool": "write_file",
+          "ok": true,
+          "output": "Wrote 138 lines to repo/humanize/number.py."
+        },
+        {
+          "tool": "run_tests",
+          "ok": true,
+          "output": "2/2 passed (smoke tests only; these are not the grading tests)"
+        },
+        {
+          "tool": "submit",
+          "ok": true,
+          "output": "Submitted. The episode is over."
+        }
+      ],
+      "result": {
+        "task_id": "bugfix_metric_zero_domain_error",
+        "reward": 1.0,
+        "pass_fraction": 1.0,
+        "passed": 12,
+        "collected": 12,
+        "per_test": {
+          "tests.test_number::test_metric_of_zero_needs_no_prefix": "passed",
+          "tests.test_number::test_metric_of_zero_still_appends_the_unit": "passed",
+          "tests.test_number::test_metric_of_zero_honours_a_wider_precision": "passed",
+          "tests.test_number::test_metric_of_zero_honours_a_narrower_precision": "passed",
+          "tests.test_number::test_metric_of_floating_point_zero_matches_integer_zero": "passed",
+          "tests.test_number::test_metric_omits_the_space_before_a_degree_sign": "passed",
+          "tests.test_number::test_metric_keeps_three_significant_digits_by_default": "passed",
+          "tests.test_number::test_metric_separates_a_unit_with_a_space": "passed",
+          "tests.test_number::test_metric_precision_argument_widens_the_mantissa": "passed",
+          "tests.test_number::test_metric_picks_the_prefix_that_avoids_leading_zeros": "passed",
+          "tests.test_number::test_metric_uses_submultiple_prefixes_below_one": "passed",
+          "tests.test_number::test_metric_falls_back_to_scientific_notation_outside_the_prefix_range": "passed"
+        },
+        "gates": [],
+        "submitted": true,
+        "tool_calls": 5,
+        "limits_enforced": {
+          "wall_clock_s": true,
+          "network": true,
+          "cpu_s": false,
+          "memory_mb": false,
+          "max_file_mb": false,
+          "max_processes": false
+        }
+      }
+    }
+  }
+}
