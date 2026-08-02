@@ -27,7 +27,7 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -241,12 +241,23 @@ def run_tests(
     *,
     timeout_s: int = 60,
     tail_chars: int = 2000,
+    extra_pythonpath: Sequence[Path] = (),
+    env_overrides: dict[str, str] | None = None,
+    preexec_fn: Callable[[], None] | None = None,
 ) -> TestResult:
     """Run pytest inside a materialised working copy.
 
     cwd and PYTHONPATH are both `work_dir/repo`, so tests import the repo the same way a
     user would. Config inheritance is cut off with a generated ini, and the environment is
     scrubbed of the variables that make runs non-deterministic.
+
+    The last three arguments are the hardening hooks used by the graded path
+    (`envs.coding_env.verifier`): an extra PYTHONPATH entry carrying a `sitecustomize.py`
+    network guard, extra environment variables, and a POSIX `setrlimit` callback. They are
+    optional and default to off so that authoring tools keep the cheap path - but they hang
+    off *this* function deliberately, because 5.6's critical invariant is that evaluation
+    and the RL reward come from the same runner. A second, hardened copy of this code would
+    be free to drift, and the study would be invalid the moment it did.
     """
     work_dir = Path(work_dir).resolve()
     repo_dir = work_dir / "repo"
@@ -258,10 +269,11 @@ def run_tests(
     ini.write_text(_ISOLATED_INI, encoding="utf-8")
     junit = work_dir / "_junit.xml"
 
+    path_entries = [str(Path(p).resolve()) for p in extra_pythonpath] + [str(repo_dir)]
     env = {k: v for k, v in os.environ.items() if not k.startswith(("PYTEST_", "HYPOTHESIS_"))}
     env.update(
         {
-            "PYTHONPATH": str(repo_dir),
+            "PYTHONPATH": os.pathsep.join(path_entries),
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONHASHSEED": "0",  # determinism (5.4 rule 3)
             "PYTHONWARNINGS": "ignore",
@@ -269,6 +281,7 @@ def run_tests(
             "COLUMNS": "100",
         }
     )
+    env.update(env_overrides or {})
 
     cmd = [
         sys.executable,
@@ -287,10 +300,21 @@ def run_tests(
         *[str(work_dir / f) for f in test_files],
     ]
 
+    kwargs: dict[str, Any] = {}
+    if preexec_fn is not None:  # POSIX only; ignored on Windows, see envs/coding_env/limits.py
+        kwargs["preexec_fn"] = preexec_fn
+
     result = TestResult()
     try:
         proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            cmd, cwd=repo_dir, env=env, capture_output=True, text=True, timeout=timeout_s, check=False
+            cmd,
+            cwd=repo_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+            **kwargs,
         )
     except subprocess.TimeoutExpired:
         result.timed_out = True

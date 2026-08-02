@@ -193,3 +193,76 @@ findings**. No task, sandbox or benchmark file was touched; held-out untouched.
 `include_tests=False`, verifier restoring pristine tests from source before grading, no network,
 CPU/memory caps, hard timeout (timeout = failure, reward 0), and a test proving the hidden suite is
 both unreadable and unwritable from inside the sandbox.
+
+---
+
+## 2026-08-02 · B3 batch 2 · Sandbox, verifier, isolation proof [security critical]
+
+**Done:** `envs/coding_env/{sandbox,verifier,limits}.py` and 36 new tests.
+
+**Isolation is absence, not permissions.** `Sandbox.start` materialises with
+`include_tests=False`, so the hidden suite is never written into the agent's world. That is
+stronger than a permission check, because it cannot be defeated by a hole in the check — there is
+no file to reach. Three layers, in the order an attacker meets them: **absence** (nothing on disk),
+**containment** (`Toolbox._resolve` rejects absolute paths and, *after* `resolve()`, anything
+outside the root), **refusal** (`run_tests` will not run if a `tests/` directory appears anyway).
+
+**The verifier never trusts the sandbox.** `_build_grading_copy` materialises a *fresh* copy from
+`benchmark/tasks/…` — so the suite that runs is byte-identical to git — and only then copies the
+agent's `repo/` over it. `test_verifier_ignores_tests_planted_in_the_sandbox` plants a suite that
+passes trivially and asserts the score is unchanged: still 12 collected, still < 1.0.
+
+**Gates (5.7), all zeroing rather than penalising:** `tests_modified`, `no_submit`,
+`sandbox_escape`, `syntax_broken`, plus `timeout`. `pass_fraction` is kept alongside the zeroed
+`reward` so the *cost* of each gate is measurable rather than invisible. A timeout is a scored
+failure that still emits a row — raising instead would drop the slowest rollouts out of the dataset
+and bias every aggregate computed from it. `syntax_broken` is `ast.parse`, not import: importing
+runs module-level code, which for a broken repo can hang or write files.
+
+**One hole found by writing the test, not by reading the code:** the verifier also gates on a
+*planted pytest hook*. The write globs already forbid `**/conftest.py`, but a `conftest.py` written
+straight to disk would otherwise have let `pytest_collection_modifyitems` empty the suite and score
+1.0 on zero tests. `_has_injected_hook` diffs against the pristine repo, so a task that legitimately
+ships one keeps it.
+
+**Honest limits.** `ResourceLimits.enforced()` reports per-cap truth for the running platform and
+the verifier records that dict on **every** result. On this Windows box only the wall clock and the
+network guard actually hold; `cpu_s`, `memory_mb`, `max_file_mb` and `max_processes` are POSIX
+`setrlimit` and are reported as **False** here. Claiming otherwise in the write-up would be exactly
+the fabrication §1.2 forbids.
+
+**Bug found by running it:** the first network guard replaced `socket.socket` outright. `ssl.py`
+does `class SSLSocket(socket)` at import, so every graded run died with an INTERNALERROR from
+`pdb → asyncio → ssl` before collecting a single test — reward 0 for correct solutions. The guard
+now patches `connect`/`connect_ex`/`create_connection`/`getaddrinfo` and leaves the class alone;
+`test_network_guard_survives_importing_ssl` is the regression.
+
+**Symlink vector is actually proven, not skipped.** `os.symlink` needs Developer Mode on Windows, so
+the fixture falls back to a directory junction (`mklink /J`, no elevation). Without that fallback the
+one vector most likely to defeat a naive path check would have silently skipped on the machine this
+is developed on.
+
+**Single runner preserved.** `task_loader.run_tests` gained three optional, default-off hooks
+(`extra_pythonpath`, `env_overrides`, `preexec_fn`) rather than the verifier growing its own copy of
+the pytest invocation — 5.6's invariant is that eval and RL reward come from the same runner, and a
+second copy would be free to drift.
+
+**Commands run:** `uv run pytest` · `uv run ruff check .` · `uv run ruff format .` ·
+`uv run python scripts/verify_gold_patches.py --task bugfix_metric_zero_domain_error`
+
+**Numbers (measured):** **117 tests passed** (36 new: 22 isolation, 14 verifier/limits), 0 skipped;
+ruff **0 findings**. One-task gold check still passes (6/12 untouched → 12/12 with gold, floor 0.50),
+confirming the `run_tests` signature change did not disturb the authoring path. Corpus untouched at
+**26 train / 0 held-out**; the hostile-episode test asserts the task directory is byte-identical
+after every attack vector fires.
+
+**Known limits, recorded not hidden:**
+- The network guard is a `sitecustomize.py` patch, not a firewall. A subprocess started with a
+  different interpreter, or a C extension calling `connect(2)`, walks past it.
+- CPU/memory/fsize/nproc caps do not exist on Windows. They will engage unchanged on a Linux
+  training box; until then, `limits_enforced` says so on every row.
+- Hardlinks would defeat the `resolve()` containment check, but no tool creates one and the surface
+  is exactly six tools.
+
+**Next:** B3 batch 3 — resources server (`POST /verify`) and the agent harness as a thin subclass of
+NeMo Gym's `simple_agent`.
