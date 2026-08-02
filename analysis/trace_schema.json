@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rl-coding-agents/analysis/trace_schema.json",
+  "title": "Rollout trace (one line of results/raw/<run_id>/rollouts.jsonl)",
+  "description": "One episode, start to reward. Written by analysis.trace.RolloutTrace; every field is populated by a real run - nothing here is hand-authored. The row is deliberately self-contained: task identity, budgets, the full tool transcript, the graded result, which resource caps the host actually applied, and the commits of every moving part. A trace that needs another file to be interpreted is a trace that stops being interpretable the moment that file changes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "rollout_id",
+    "started_at",
+    "finished_at",
+    "duration_s",
+    "task",
+    "agent",
+    "budgets",
+    "tool_calls",
+    "result",
+    "limits_enforced",
+    "versions"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1",
+      "description": "Bumped on any breaking change, so an old results/ directory stays readable."
+    },
+    "run_id": { "type": "string", "minLength": 1 },
+    "rollout_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique within the run. For GRPO this distinguishes the k samples of one prompt."
+    },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "duration_s": { "type": "number", "minimum": 0 },
+
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "split", "category", "difficulty", "provenance_source", "n_tests_declared"],
+      "properties": {
+        "id": { "type": "string" },
+        "split": { "type": "string", "enum": ["train", "heldout"] },
+        "category": {
+          "type": "string",
+          "enum": ["bug_fix", "test_update", "config_fix", "small_feature", "docs_improve"]
+        },
+        "difficulty": { "type": "string", "enum": ["easy", "medium", "hard"] },
+        "provenance_source": {
+          "type": "string",
+          "description": "real_repo or invented. Carried per-rollout so results can be split by provenance without re-reading the corpus."
+        },
+        "n_tests_declared": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "model", "transport"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["policy", "scripted_gold"],
+          "description": "scripted_gold is the environment smoke test - it writes the gold solution through the real tools. Recorded so a smoke row can never be mistaken for a model result."
+        },
+        "model": {
+          "type": ["string", "null"],
+          "description": "null for scripted_gold, which has no model."
+        },
+        "transport": { "type": "string", "enum": ["direct", "gym"] }
+      }
+    },
+
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_turns", "max_tool_calls", "tool_calls_used"],
+      "properties": {
+        "max_turns": { "type": "integer", "minimum": 1 },
+        "max_tool_calls": { "type": "integer", "minimum": 1 },
+        "tool_calls_used": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "tool_calls": {
+      "type": "array",
+      "description": "The full transcript, in order. Arguments and outputs are truncated to keep a rollouts.jsonl readable - a write_file call carries a whole source file otherwise.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["index", "name", "arguments", "ok", "output", "output_chars"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 0 },
+          "name": {
+            "type": "string",
+            "description": "Not enum-constrained: an unknown name is exactly what a confused policy emits, and the trace has to be able to record it."
+          },
+          "arguments": { "type": "object" },
+          "ok": { "type": "boolean" },
+          "output": { "type": "string" },
+          "output_chars": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Length before truncation, so context pressure stays measurable."
+          }
+        }
+      }
+    },
+
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reward",
+        "pass_fraction",
+        "tests_passed",
+        "tests_total",
+        "gates",
+        "submitted",
+        "per_test"
+      ],
+      "properties": {
+        "reward": {
+          "type": "number",
+          "description": "reward_v1 (spec 5.7): pass_fraction, or 0.0 if any gate fired. ADR 0006 proposes widening the range to [-1,1]; that would bump schema_version."
+        },
+        "pass_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Kept alongside a zeroed reward so the cost of each gate is measurable."
+        },
+        "tests_passed": { "type": "integer", "minimum": 0 },
+        "tests_total": { "type": "integer", "minimum": 0 },
+        "gates": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "tests_modified",
+              "no_submit",
+              "sandbox_escape",
+              "syntax_broken",
+              "timeout",
+              "test_count_mismatch"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "submitted": { "type": "boolean" },
+        "per_test": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "enum": ["passed", "failed", "error", "skipped"] },
+          "description": "nodeid -> outcome. Per-test detail is what makes a failure taxonomy possible later."
+        }
+      }
+    },
+
+    "limits_enforced": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" },
+      "description": "Which execution caps the host really applied. The setrlimit-based ones are false on Windows, so a claim about memory limits can always be checked against the run that produced it.",
+      "required": ["wall_clock_s", "network"]
+    },
+
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo_commit", "python", "platform", "nemo_gym", "nemo_rl"],
+      "properties": {
+        "repo_commit": { "type": ["string", "null"] },
+        "python": { "type": "string" },
+        "platform": { "type": "string" },
+        "nemo_gym": { "$ref": "#/$defs/pin" },
+        "nemo_rl": { "$ref": "#/$defs/pin" }
+      }
+    }
+  },
+
+  "$defs": {
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pinned", "actual", "matches"],
+      "properties": {
+        "pinned": { "type": "string", "description": "The commit this code was written against." },
+        "actual": { "type": ["string", "null"], "description": "What is checked out in _vendor/, or null if absent." },
+        "matches": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -340,3 +340,90 @@ the four `setrlimit` caps false — correct for Windows.
 
 **Next:** B3 batch 4 — trace persistence per `analysis/trace_schema.json`, pinned SHAs for
 `_vendor/nemo-gym` and NeMo RL, and `docs/SETUP_NEW_MACHINE.md`.
+
+---
+
+## 2026-08-02 · B3 batch 4 · Trace + portability — **B3 CLOSED**
+
+**Traces.** `analysis/trace_schema.json` (draft 2020-12) plus `analysis/trace.py`. Every field is
+populated by a real run — the schema was written first, then the smoke test was made to satisfy it,
+not the other way round. Two decisions:
+
+- **The row is self-contained.** Category, provenance, budgets, per-test outcomes, the commits of
+  every moving part and which resource caps the host actually applied are copied in rather than
+  looked up later. A trace that needs `benchmark/tasks/` at its original revision stops being
+  interpretable the moment a task is edited.
+- **Validation happens on write.** A malformed row found during analysis is a run to repeat; found
+  at write time it is a bug fixed in seconds. `write_jsonl` re-validates, so a hand-built row cannot
+  slip in either.
+
+Tests target the *rejections* — missing field, unknown gate name, stray key, out-of-range
+`pass_fraction` — because a silently accepted bad row looks fine until someone tries to use it.
+`test_a_real_episode_produces_a_valid_row` runs an actual episode rather than validating a row
+written to match the schema it is checked against.
+
+**Pinned versions.** `analysis/versions.py` + `docs/pinned_versions.md`:
+
+| Stack | Commit | `requires-python` |
+| --- | --- | --- |
+| NeMo Gym | `ec5a8136046aa0dd0c1525313654502f2fb7c42e` (2026-07-31) | `>=3.12` |
+| NeMo RL | `55296257c96d49cd95c7d77613cb0f36bd4a4dc7` (2026-08-02) | `>=3.13.13,<3.14` |
+
+NeMo RL cloned to `_vendor/nemo-rl` (23 MB, `--depth 1`), **not installed, not run, not imported**.
+
+⚠️ **Finding: the two stacks do not share a Python version.** NeMo RL requires **3.13.13 ≤ py <
+3.14** and will not install on 3.12, while NeMo Gym needs 3.12 here (`ray` publishes no
+`win_amd64` wheel past cp312). A training box needs **two interpreters**. This contradicts the
+"Python 3.12 for everything" assumption in the batch brief; `SETUP_NEW_MACHINE.md` §1 and §3 say so
+explicitly, and a unit test pins both strings so the fact cannot quietly disappear.
+
+**Drift is detected, not assumed.** `versions.resolve()` reads the live `HEAD` of each vendored
+clone and every trace records `{pinned, actual, matches}`. Recording only the pin lets a clone
+drift silently; recording only the actual commit makes an old result uninterpretable. A test asserts
+both docs quote the same SHAs as the code, because the clone commands are what a human copy-pastes.
+
+**`docs/SETUP_NEW_MACHINE.md`** — cold start in five steps, then §6, marked **REQUIRED**: re-check
+`ResourceLimits.enforced()` on Linux. Four of six caps are POSIX `setrlimit`, `preexec_fn()` returns
+`None` off POSIX, so `cpu_s`, `memory_mb`, `max_file_mb` and `max_processes` have **never executed
+even once**. The doc gives the expected output (all six `true`) and four probes that make each cap
+actually bite, because "the call did not raise" is not "the limit applied". Until that is done they
+are *claimed, not enforced* — which is exactly why `limits_enforced` rides on every trace row
+instead of sitting in a config nobody reads. §7's hardware table separates **measured** (CPU-only
+work, ~40 s) from ***projected*** (every GPU figure — there is no NVIDIA GPU on this machine).
+
+**Also this batch:** `/verify` now returns `per_test`, so the HTTP transport can build a complete
+trace from what the wire actually returned rather than from a second local re-run.
+
+**Commands run:** `uv run pytest` · `uv run ruff check .` · `smoke_one_task.py --trace` on both
+transports · `git check-ignore -v`
+
+**Numbers (measured):** **168 passed, 1 skipped** (21 new); ruff **0 findings**. Smoke **1.00 /
+12 of 12** on both transports, each emitting a schema-valid trace. Ignore rules confirmed:
+`.venv/` → `.gitignore:23`, `_vendor/` → `:72`, `results/**/*.jsonl` → `:54`.
+
+**Artifacts:** `results/raw/b3_smoke/{direct,gym}.json`, `trace_example.json` (one full row,
+committed because the `.jsonl` is correctly gitignored).
+
+---
+
+### B3 exit criteria (spec §4)
+
+| Criterion | State |
+| --- | --- |
+| Resources server exposing the §5.5 tool surface + `POST /verify` | ✅ driven end-to-end over HTTP, reward 1.00 |
+| Agent harness as a thin subclass of a built-in | ✅ `CodingAgent`: one method, no loop, both asserted |
+| Sandbox: copy, hidden tests outside writable root, pristine restore, no network, caps, timeout | ✅ — caps are POSIX-only and **unexercised**, see `SETUP_NEW_MACHINE.md` §6 |
+| Rollout trace persisted exactly per `analysis/trace_schema.json` | ✅ validated on write, both transports |
+| `make smoke` runs one task end-to-end and returns a real reward | ✅ `PASS … reward=1.00 tests=12/12` |
+| Isolation test proves the agent cannot read or write hidden tests ← hard gate | ✅ 22 tests, five vectors, 0 skipped |
+
+**Carried into B4, not silently dropped:**
+1. Resource caps unverified on POSIX (above).
+2. Ray/`gym env start` unverified — Windows cannot boot the cluster.
+3. Corpus is **26 train / 0 held-out**, below §5.2's 30 + 10, and **42% `real_repo`** against a
+   ≥50% target. B2 was closed by decision, not by hitting the target.
+4. ADR 0006 remains **Proposed**; normalisation and the −1.0 gate constant must land together.
+
+**Next:** B4 — `rewards/components.py` and `compose.py` (reward_v1 + the gates as pure, unit-tested
+functions), `analysis/metrics.py` (pass@k + bootstrap CI), `analysis/failure_taxonomy.py`, and
+`docs/reward_design.md`.

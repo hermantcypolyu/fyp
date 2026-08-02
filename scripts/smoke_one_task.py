@@ -34,8 +34,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from analysis.trace import Timer, build_row, write_jsonl  # noqa: E402
 from benchmark.tools.task_loader import Task, iter_tasks, load_task, materialise  # noqa: E402
 from envs.coding_env.session import EpisodeSession, episode_metadata  # noqa: E402
+from envs.coding_env.verifier import VerifyResult  # noqa: E402
 
 
 def gold_writes(task: Task) -> list[tuple[str, str]]:
@@ -74,12 +76,18 @@ def scripted_episode(task: Task) -> list[tuple[str, dict[str, Any]]]:
 
 def run_direct(task: Task) -> dict[str, Any]:
     session = EpisodeSession.open(task)
+    timer = Timer.start()
     try:
         transcript = []
         for name, args in scripted_episode(task):
             out = session.tool(name, args)
             transcript.append({"tool": name, "ok": out["ok"], "output": out["output"][:200]})
-        return {"transcript": transcript, "result": session.grade().to_dict()}
+        result = session.grade()
+        return {
+            "transcript": transcript,
+            "result": result.to_dict(),
+            "trace": _trace(task, result, session.sandbox.toolbox.log, timer, "direct"),
+        }
     finally:
         session.close()
 
@@ -105,6 +113,7 @@ def run_gym(task: Task) -> dict[str, Any]:
         server_client=MagicMock(spec=ServerClient),
     )
     row = {"task_id": task.id, "split": task.split, "metadata": episode_metadata(task)}
+    timer = Timer.start()
     with TestClient(server.setup_webserver()) as client:
         seed = client.post("/seed_session", json=row)
         seed.raise_for_status()
@@ -114,6 +123,8 @@ def run_gym(task: Task) -> dict[str, Any]:
             reply.raise_for_status()
             body = reply.json()
             transcript.append({"tool": name, "ok": body["ok"], "output": body["output"][:200]})
+        # Grab the transcript before /verify, which closes the session and drops the sandbox.
+        tool_log = list(next(iter(server.store.sessions.values())).sandbox.toolbox.log)
         verified = client.post(
             "/verify",
             json={
@@ -134,7 +145,48 @@ def run_gym(task: Task) -> dict[str, Any]:
             },
         )
         verified.raise_for_status()
-        return {"transcript": transcript, "result": verified.json(), "live_sessions": len(server.store.sessions)}
+        scored = verified.json()
+        return {
+            "transcript": transcript,
+            "result": scored,
+            "live_sessions": len(server.store.sessions),
+            "trace": _trace(task, _result_from_json(scored), tool_log, timer, "gym"),
+        }
+
+
+def _result_from_json(scored: dict[str, Any]) -> VerifyResult:
+    """Rebuild the structured result from the HTTP response.
+
+    The trace must be produced from what `/verify` actually returned, not from a local
+    re-run: if the wire format ever loses a field, the trace should break here rather than
+    quietly fall back to a second, unrelated measurement.
+    """
+    return VerifyResult(
+        task_id=scored["task_id"],
+        reward=scored["reward"],
+        pass_fraction=scored["pass_fraction"],
+        passed=scored["tests_passed"],
+        collected=scored["tests_total"],
+        per_test=scored["per_test"],
+        gates=scored["gates"],
+        submitted=scored["submitted"],
+        tool_calls=scored["tool_calls"],
+        limits_enforced=scored["limits_enforced"],
+    )
+
+
+def _trace(task: Task, result: VerifyResult, tool_log: list[Any], timer: Timer, transport: str) -> dict[str, Any]:
+    return build_row(
+        run_id=f"b3_smoke_{transport}",
+        rollout_id=f"{task.id}#0",
+        task=task,
+        result=result,
+        tool_calls=tool_log,
+        timer=timer,
+        transport=transport,
+        agent_kind="scripted_gold",
+        model=None,
+    )
 
 
 def main() -> int:
@@ -143,6 +195,7 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=1, help="How many tasks to run. Capped at 3 (spec 1.4).")
     parser.add_argument("--transport", choices=("direct", "gym"), default="direct")
     parser.add_argument("--json", type=Path, help="Write the full report here.")
+    parser.add_argument("--trace", type=Path, help="Write rollout traces here as JSONL (analysis/trace_schema.json).")
     args = parser.parse_args()
 
     if args.task:
@@ -166,6 +219,10 @@ def main() -> int:
             f"{result.get('tests_total', result.get('collected'))}  "
             f"gates={gates or '-'}"
         )
+
+    if args.trace:
+        write_jsonl([outcome["trace"] for outcome in report["tasks"].values()], args.trace)
+        print(f"wrote {args.trace}")
 
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
