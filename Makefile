@@ -65,3 +65,7 @@ freshclone: ## The five-step acceptance check from AGENT_BUILD_SPEC 0.3
 clean: ## Remove caches and sandbox scratch
 	$(PY) -c "import shutil,pathlib;[shutil.rmtree(p,ignore_errors=True) for p in pathlib.Path('.').rglob('__pycache__')]"
 	$(PY) -c "import shutil;[shutil.rmtree(p,ignore_errors=True) for p in ['.pytest_cache','.ruff_cache','.sandbox']]"
+
+gym-vendor:
+	uv sync --extra gym
+	uv pip install --no-deps -e ../_vendor/nemo-gym
