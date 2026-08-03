@@ -937,3 +937,95 @@ the prototype's first question.
 seal **intact**.
 
 **No training run. No weights downloaded. No GPU touched.**
+
+---
+
+## 2026-08-03 · **BUILD CLOSED** · fresh-clone acceptance passed
+
+### Fresh-clone acceptance — MEASURED, this machine, today
+
+`make freshclone` (now including the seal check), run end to end:
+
+| # | Step | Result |
+| --- | --- | --- |
+| 1 | `uv sync --extra dev` | resolved 165 packages, checked 17 |
+| 2 | `validate_tasks.py --all` | **36 tasks, 0 errors**, 5 known warnings |
+| 3 | `verify_gold_patches.py --split all` | **36/36 solvable and failable**; floor min 0.00 / mean 0.47 / max 0.62 |
+| 4 | `pytest` + `check_heldout_seal.py` | **232 passed, 1 skipped**; seal `318fedc8868b` unchanged |
+| 5 | `smoke_one_task.py --limit 1` | **reward 1.00**, 12/12 tests, no gates |
+
+Two incidental findings, both confirming documented assumptions: `uv` is not on the shell `PATH`
+here (it lives under the Python 3.14 scripts directory), and **`pip` is absent from the venv
+entirely** — which is exactly why `RUN_ON_A5000.md` routes every install through `uv`.
+
+### What exists
+
+- **36 benchmark tasks** — 26 train, 10 held-out — every one validated, solvable by its gold patch,
+  and failable without it. `n_tests`, `floor_tests` and `repo.loc` are all validator-**measured**,
+  never authored.
+- **Held-out sealed** at tree `318fedc8868b`, enforced by `scripts/check_heldout_seal.py` in
+  `make check`. Both failure routes tested by tampering.
+- **Environment** — six tools, sandbox, two transports, and one verifier shared by evaluation and
+  RL (§5.6).
+- **Reward** — `reward_v1` normalised against the measured floor (ADR 0006): do-nothing `0.0`, gold
+  `1.0`, regression negative, gates `-1.0` derived from `REWARD_MIN` so they cannot drift.
+- **Unscorable rollouts** — `rewards/transport.py`: a transport failure returns a sentinel, never a
+  score; `DiscardTracker` fails past a 2% discard rate (ADR 0007).
+- **Handoff** — `TRAINING_READINESS.md`, `RUN_ON_A5000.md`, `A5000_CARRY_FORWARD.md`,
+  `heldout_seal.md`, plus `configs/training/grpo_unsloth_a5000.yaml` and `configs/eval/baseline.yaml`,
+  every hyperparameter tagged GROUNDED / CHOSEN / ASSUMPTION against sources read on the day.
+- **7 ADRs**, 232 unit tests, 0 ruff findings.
+
+### What has never executed
+
+- **No training.** Not one step, on any hardware. No weights downloaded, no checkpoint exists.
+- **No evaluation sweep.** No baseline arm.
+- **No held-out access.** Sealed, and to be run exactly once at the end.
+- **No GPU, ever** — the build machine has none.
+- **`setrlimit` caps** have never constrained a process (POSIX-only).
+- **gym transport** has never run here (`uvloop` has no Windows build); asserted statically.
+- **The rollout adapter does not exist.** It is specified in ADR 0007, not built.
+- **Trainer selection is unresolved** — see the runbook.
+
+### Ordered next actions on Linux
+
+0. **Inspect the trainer for a reward clamp.** Code inspection, no GPU, no install. A `max(0, r)`
+   anywhere collapses every `-1.0` gate onto `0.0` and silently removes the only deterrent against
+   the #1 reward hack. **Fix the trainer — never raise `GATE_REWARD`.**
+1. Verify the box: `nvidia-smi` (expect 24576 MiB), Python 3.12, Linux.
+2. Clear the remaining carry-forward: `setrlimit` caps, `make smoke-gym`, regenerate
+   `rollouts_gym.jsonl` at schema v2.
+3. Install via `uv`; add `unsloth==2026.1.4` / `unsloth_zoo==2026.1.4` separately.
+4. Verify the port: `make freshclone`.
+5. **Resolve trainer selection and build the rollout adapter** — before any hyperparameter work.
+   Record the outcome as an ADR. Decision criteria are in the runbook; criteria 1–4 are
+   correctness, 5 is feasibility, and correctness wins.
+6. Baseline control arm on train.
+7. 2-step GRPO smoke; record peak VRAM.
+8. Full run. Checkpoint selection from a **train-only** validation slice.
+9. Held-out, **once**, at the very end.
+
+### The four silent-collapse hazards
+
+Grouped in the runbook under "failures that look like valid scores" because they share one
+signature — the run continues, the curve looks plausible, nothing errors.
+
+| # | Hazard | Status |
+| --- | --- | --- |
+| 1 | gate constant left at `0.0` under a normalised reward | closed by design |
+| 2 | trainer clamps / `max(0, r)` | **OPEN — Phase 0, first action on the box** |
+| 3 | failed `/verify` scored as `0.0` | closed in our code |
+| 4 | placeholder turn substituted for an empty rollout | **OPEN** — upstream behaviour; adapter must discard |
+
+### The constraint that outlives the trainer choice
+
+From ADR 0007, and true whichever path wins: **re-tokenising a rendered transcript is unsound, not
+untidy.** It is not the token sequence the policy emitted, so the logprobs belong to a different
+distribution and the GRPO ratio is computed against the wrong thing. The adapter must carry the
+sampled token ids and per-token logprobs through per turn.
+
+**Commands run:** `uv sync --extra dev` · `validate_tasks.py --all` ·
+`verify_gold_patches.py --split all` · `uv run pytest` · `check_heldout_seal.py` ·
+`smoke_one_task.py --limit 1`
+
+**No training run. No weights downloaded. No GPU touched. Held-out sealed and untouched.**

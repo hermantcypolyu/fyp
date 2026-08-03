@@ -11,7 +11,49 @@ no GPU, no training run and no weights downloaded. Every figure is tagged:
 
 ---
 
-## Phase 0 — verify the machine
+## Phase 0 — FIRST, before you run anything: inspect the trainer for a reward clamp
+
+This is a **code inspection**. It needs no GPU, no install and no model. Do it before
+`nvidia-smi`, because it decides whether any run you do afterwards is worth keeping.
+
+`reward_v1` is in `[-1, 1]`. Every hard gate returns exactly `-1.0`, and that is the only thing
+making the #1 reward hack (`tests_modified`) worse than doing nothing. Read the trainer's reward
+path end to end and find every place a reward is transformed between `verify()` and the advantage:
+
+```bash
+# in whichever trainer you land on (see "Trainer selection is UNRESOLVED" below)
+grep -rnE 'max\(0|relu|clamp|clip|\.abs\(|normali[sz]e' <trainer>/  # start here, then read properly
+```
+
+Look for, and rule out:
+
+- `max(0, r)`, `relu`, `torch.clamp(min=0)`, `np.clip(r, 0, 1)`
+- reward normalisation assuming a `[0, 1]` domain (e.g. dividing by a running max)
+- return/advantage whitening that special-cases sign
+- a value head or baseline initialised assuming non-negative returns
+- logging or dashboards that clip at zero — these hide it rather than cause it
+
+**If anything clamps, the `-1.0` gates collapse onto `0.0` — which is exactly what doing nothing
+scores — and the deterrent disappears with no error and no failing test.**
+
+**The fix is in the trainer, or in a thin adapter around it. Never by raising `GATE_REWARD`** —
+that re-opens the hack from the other side, and it is the one change that would look like a fix
+while removing the protection entirely.
+
+Once a trainer is chosen and read, prove it empirically: drive one deliberately gated episode (end
+without `submit`) through a single training step and assert the advantage it receives is the most
+negative in its group.
+
+```bash
+uv run pytest rewards/tests -q          # our own invariants — already green, not sufficient
+```
+
+Those tests prove *our* arithmetic. They cannot see inside the trainer, which is why this phase is
+manual and comes first. See [Failures that look like valid scores](#failures-that-look-like-valid-scores).
+
+---
+
+## Phase 1 — verify the machine
 
 ```bash
 nvidia-smi
@@ -42,32 +84,12 @@ uv run python scripts/capture_hardware.py --out docs/_hw_target.md
 
 ---
 
-## Phase 1 — BLOCKING: clear the carry-forward
+## Phase 2 — BLOCKING: clear the rest of the carry-forward
 
 `docs/A5000_CARRY_FORWARD.md` lists four things that have **never executed on any machine**.
-Clear all four before anything else. **Item 4 first** — it is the one that can invalidate a
-whole training run without producing an error.
+Item 4 is Phase 0 above. Clear the remaining three before installing anything heavier.
 
-### 1.4 (FIRST) — confirm the trainer does not clamp negative rewards
-
-`reward_v1` is in `[-1, 1]`. Every hard gate returns exactly `-1.0`, and that is the only
-thing making the #1 reward hack (`tests_modified`) worse than doing nothing.
-
-**If anything in the trainer applies `max(0, r)`, a relu, a `[0,1]` normalisation or a
-clip, the gates collapse onto `0.0` — which is what doing nothing scores — and the
-deterrent disappears with no error and no failing test.**
-
-```bash
-# read the reward path end to end, then prove it with a gated rollout
-uv run pytest rewards/tests -q          # the local invariant, already green
-```
-
-Then drive one deliberately gated episode (end without `submit`) through a single training
-step and assert the advantage it receives is the most negative in its group. **If the
-trainer clamps, fix the trainer or add a thin adapter. Never raise `GATE_REWARD`** — that
-re-opens the hack this is all guarding.
-
-### 1.1 — `ResourceLimits.enforced()`
+### 2.1 — `ResourceLimits.enforced()`
 
 Four `setrlimit` caps (wall clock, CPU, address space, file size) have **never constrained a
 process**: `resource` is POSIX-only, so on Windows `preexec_fn()` returns `None` and all four
@@ -81,7 +103,7 @@ uv run python scripts/smoke_one_task.py --limit 1
 Confirm `limits_enforced` is `true` for all four in the trace, then force each cap once and
 check the episode ends as a **scored row with the `timeout` gate**, not a hang or a traceback.
 
-### 1.2 — gym transport end to end
+### 2.2 — gym transport end to end
 
 ```bash
 uv sync --extra gym
@@ -92,7 +114,7 @@ Reward must be **1.0** and must equal the `--transport direct` reward for the sa
 That equality is §5.6's one-verifier invariant and the most important thing to re-check
 after ADR 0006.
 
-### 1.3 — regenerate the stale gym trace
+### 2.3 — regenerate the stale gym trace
 
 ```bash
 uv run python scripts/smoke_one_task.py --transport gym \
@@ -105,7 +127,7 @@ artefact in the repo. Confirm the new row reads `schema_version: "2"` and carrie
 
 ---
 
-## Phase 2 — install
+## Phase 3 — install
 
 `pip` may not be present. Everything goes through `uv`.
 
@@ -130,7 +152,7 @@ uv pip install "unsloth==2026.1.4" "unsloth_zoo==2026.1.4" omegaconf
 
 ---
 
-## Phase 3 — verify the port before trusting anything
+## Phase 4 — verify the port before trusting anything
 
 Run in this order. Each is cheap and each catches a different class of breakage.
 
@@ -156,7 +178,7 @@ corpus-mix shortfalls, one provenance figure at 47%. See `PROGRESS.md`.
 
 ---
 
-## Phase 4 — baseline (the control arm)
+## Phase 5 — baseline (the control arm)
 
 Do this **before** any training. Without it there is nothing to compare against.
 
@@ -175,7 +197,7 @@ many `no_submit` gates and a mean reward near **0.0**, which under ADR 0006 is e
 
 ---
 
-## Phase 5 — 2-step GRPO smoke
+## Phase 6 — 2-step GRPO smoke
 
 ```bash
 # config: configs/training/grpo_unsloth_a5000.yaml, with max_steps: 2
@@ -201,9 +223,9 @@ project will have about memory.
 
 ---
 
-## Phase 6 — full run
+## Phase 7 — full run
 
-Only after Phases 1–5 are green. Checkpoint selection uses a **validation slice carved from
+Only after Phases 0–6 are green. Checkpoint selection uses a **validation slice carved from
 train**. The held-out split is not touched, not inspected, and not used to choose anything.
 
 ---
@@ -221,8 +243,32 @@ score is allowed to enter the reward stream as if it were one.**
 | # | Hazard | What collapses | Status |
 | --- | --- | --- | --- |
 | 1 | Gate constant left at `0.0` while the reward is normalised | `tests_modified` scores the same as an immediate submit — the #1 reward hack becomes free | **closed by design** — `GATE_REWARD` is derived from `REWARD_MIN` in `rewards/compose.py`, pinned by `test_a_gated_rollout_scores_below_doing_nothing` |
-| 2 | Trainer clamps or applies `max(0, r)` | every `-1.0` gate lands on `0.0` == "did nothing"; hazard 1 returns from outside our code | **OPEN — blocking.** Carry-forward item 4 |
+| 2 | Trainer clamps or applies `max(0, r)` | every `-1.0` gate lands on `0.0` == "did nothing"; hazard 1 returns from outside our code | **OPEN — blocking. This is [Phase 0](#phase-0--first-before-you-run-anything-inspect-the-trainer-for-a-reward-clamp), the first action on the box.** Carry-forward item 4 |
 | 3 | Failed `/verify` scored as `0.0` | counterfeit do-nothing rollouts enter the group, shifting the mean and σ that GRPO normalises against | **closed in our code** — `rewards/transport.py`; must be honoured by the adapter |
+| 4 | Placeholder turn substituted for an empty rollout | a fabricated row with `generation_token_ids=[0]` is *trained on*; the loss mask is effectively zeroed and the sample teaches nothing while counting as a sample | **OPEN** — upstream behaviour; our adapter must discard instead |
+
+**Hazard 4 in detail.** NeMo Gym's `verifiers_agent` guards against a rollout that produced no
+trainable tokens — and then, rather than dropping it, appends a placeholder:
+
+```python
+if not any(item.get("generation_token_ids") for item in output):
+    logger.warning("[verifiers_agent] rollout produced no trainable tokens. ... "
+                   "Returning empty trajectory. Underlying error: %s", err_msg)
+    output.append(NeMoGymResponseOutputMessageForTraining(
+        id="msg_empty", content=[...text=""],
+        prompt_token_ids=[0], generation_token_ids=[0], generation_log_probs=[0.0],
+    ).model_dump())
+```
+
+The comment names the real cause — "this can happen when sandbox concurrency quota is exceeded" —
+which is precisely the condition a long agentic rollout hits under load. It logs a **warning**, not
+an error, and the run continues with a row that looks trainable and is not. TRL's vLLM model server
+tests describe the same failure from the other end: emptied token ids "zeroing the training loss
+mask".
+
+Our adapter must treat "no trainable tokens" the same way it treats a failed `/verify`: **discard
+the rollout and count it**, via `rewards.transport.DiscardTracker`. A rollout with no tokens is
+unscorable by definition — there is nothing to attribute the reward to.
 
 **Why `0.0` is the common thread.** Before ADR 0006, `0.0` was a safe fallback: it sat below every
 task's floor, so anything that produced it was obviously bad. After normalisation `0.0` is a
@@ -252,11 +298,58 @@ reward = rollout_output.get("reward", 0.0) or 0.0
   sample of a dying environment.
 - **Hazard 1** — already closed, but `make check` must stay green; the coupling test is what keeps
   it closed.
+- **Hazard 4** — in the adapter, check for trainable tokens *before* scoring. No tokens → discard,
+  do not substitute a placeholder.
 
-There is a fourth member of this family worth knowing about: NeMo Gym's `verifiers_agent` emits a
-placeholder turn with `generation_token_ids=[0]` when a rollout produced no trainable tokens,
-logging a warning and continuing. Same shape — a fabricated row that trains. Our adapter should
-discard instead. See [ADR 0007](decisions/0007-multi-turn-rollout-adapter-and-unscorable-rollouts.md).
+See [ADR 0007](decisions/0007-multi-turn-rollout-adapter-and-unscorable-rollouts.md).
+
+---
+
+## Trainer selection is UNRESOLVED
+
+**This is the prototype's first question**, and it must be answered before hyperparameters are
+touched. Two candidate paths exist and neither is obviously right.
+
+| | **TRL loop-owning harness** | **Unsloth × NeMo Gym** |
+| --- | --- | --- |
+| Entry point | `experimental.async_grpo.AsyncGRPOTrainer` + `HarnessRolloutWorker` | `trl.GRPOTrainer` per the NeMo Gym tutorial |
+| Turn model | multi-turn; the agent owns its own loop | **single-turn** rollout RL |
+| Token ids / logprobs | captured by a transparent proxy as `TraceEntry.completion_token_ids` / `per_token_logps` | generated internally by the trainer |
+| Unscorable rollouts | first-class: `rollout_reward_fn -> float \| None`, `None` drops from the group | not addressed; the notebook defaults to `0.0` |
+| Turn masking | `train_turn_fn`, ships `has_tool_call` | none for interleaved tool output |
+| Worked example nearest ours | `opencode` — a real coding agent scored by "the fraction of held-out tests that passed" | Sudoku / instruction-following |
+| Memory optimisations | standard TRL | Unsloth's 4-bit + LoRA path, which is why the A5000 config exists |
+| Stability | `trl.experimental` — "its API may change" | documented and version-pinned (`unsloth==2026.1.4`) |
+
+**The tension.** The TRL harness path fits our architecture almost exactly — multi-turn, per-turn
+token capture, a `None` sentinel, turn masking, and a coding-agent example with a held-out-test
+reward. But it is experimental, and it is **not** the path Unsloth documents. Unsloth is where the
+4-bit + LoRA memory story comes from, and that story is what makes a 24 GB card viable at all.
+**Whether Unsloth's optimisations compose with `AsyncGRPOTrainer` is unverified.**
+
+### Decision criteria, in order
+
+1. **Does the reward survive intact?** A `-1.0` must reach the advantage as `-1.0`
+   ([Phase 0](#phase-0--first-before-you-run-anything-inspect-the-trainer-for-a-reward-clamp)).
+   A path that clamps is disqualified unless the clamp can be removed cleanly.
+2. **Can an unscorable rollout be dropped rather than scored?** TRL's harness path has this
+   natively. If the chosen path cannot express "no score", it needs an adapter that can, because
+   hazards 3 and 4 have no other honest resolution.
+3. **Are the sampled token ids and logprobs available per turn?** This is not negotiable — see
+   ADR 0007. Re-tokenising a rendered transcript is **unsound, not untidy**: it is not the
+   sequence the policy emitted, so the ratio is computed against a different distribution.
+   Whatever trainer wins, this constraint holds.
+4. **Can tool output be excluded from the gradient?** Tool results are environment text. Training
+   on them teaches the model to predict its own tools' output.
+5. **Does it fit in 24 GB with `num_generations: 8`?** Decided by measurement in Phase 6, not by
+   argument.
+6. **Only then:** speed and API stability.
+
+Criteria 1–4 are correctness. Criterion 5 is feasibility. **If the two paths split on 1–4 and 5,
+prefer correctness and buy memory back with the [VRAM levers](#vram-levers)** — a fast run whose
+reward signal is subtly wrong produces a dissertation result that cannot be defended.
+
+Record the outcome as an ADR before writing training code.
 
 ---
 

@@ -59,6 +59,7 @@ freshclone: ## The five-step acceptance check from AGENT_BUILD_SPEC 0.3
 	$(MAKE) validate
 	$(MAKE) verify-gold
 	$(MAKE) test
+	$(MAKE) seal-check
 	$(MAKE) smoke
 
 clean: ## Remove caches and sandbox scratch
