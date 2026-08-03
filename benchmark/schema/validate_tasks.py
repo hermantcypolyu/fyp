@@ -396,6 +396,16 @@ def check_provenance(task: Task, report: Report) -> None:
             )
 
 
+def blocking_errors(report: Report, task_id: str) -> list[Finding]:
+    """Findings that must stop the behaviour check from running.
+
+    Only errors block. A warning must never suppress it: LOC_BIG is advisory, and gating on
+    every finding meant an oversized repo silently skipped its own solvable/failable checks
+    and its floor measurement - the validator reported `ok` for a task it had not run.
+    """
+    return [f for f in report.for_task(task_id) if f.level == "error"]
+
+
 def check_behaviour(task: Task, report: Report, *, fix: bool = False) -> None:
     """The two checks that actually matter: solvable by gold, failing without it (5.4 rules 1-2)."""
     tid = task.id
@@ -577,7 +587,7 @@ def main() -> int:
         check_leakage(task, report)
         check_smoke(task, report)
         check_provenance(task, report)
-        if not args.no_run and schema_ok and not report.for_task(task.id):
+        if not args.no_run and schema_ok and not blocking_errors(report, task.id):
             check_behaviour(task, report, fix=args.fix_counts)
 
         findings = report.for_task(task.id)

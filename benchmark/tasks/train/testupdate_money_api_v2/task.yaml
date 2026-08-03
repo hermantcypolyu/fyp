@@ -24,7 +24,7 @@ verification:
   test_files: [tests/test_money_suite.py]
   timeout_s: 180
   n_tests: 10
-
+  floor_tests: 4
 constraints:
   allowed_write_globs:
     - "repo/tests/**"

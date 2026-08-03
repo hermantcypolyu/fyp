@@ -27,7 +27,7 @@ verification:
   test_files: [tests/test_httpclient_docs.py]
   timeout_s: 60
   n_tests: 15
-
+  floor_tests: 8
 constraints:
   allowed_write_globs:
     - "repo/src/**"

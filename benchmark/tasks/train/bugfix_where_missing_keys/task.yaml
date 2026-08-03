@@ -26,7 +26,7 @@ verification:
   test_files: [tests/test_colls.py]
   timeout_s: 60
   n_tests: 12
-
+  floor_tests: 5
 constraints:
   allowed_write_globs:
     - "repo/funcy/colls.py"

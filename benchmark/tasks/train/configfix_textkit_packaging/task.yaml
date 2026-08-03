@@ -25,6 +25,7 @@ verification:
   test_files: [tests/test_packaging.py]
   timeout_s: 60
   n_tests: 9
+  floor_tests: 0
 
 constraints:
   allowed_write_globs:

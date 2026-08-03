@@ -26,7 +26,7 @@ verification:
   test_files: [tests/test_more_suite.py]
   timeout_s: 180
   n_tests: 10
-
+  floor_tests: 5
 constraints:
   allowed_write_globs:
     - "repo/tests/**"

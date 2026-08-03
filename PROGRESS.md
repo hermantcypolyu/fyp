@@ -621,3 +621,59 @@ and failable**, none stale; reward floor min 0.38 / mean 0.48 / max 0.62.
 
 **Held-out is NOT sealed.** No commit SHA recorded as a seal; ADR 0006 not implemented; no training
 run.
+
+---
+
+## 2026-08-03 · Step 1 · `floor_tests` backfilled for all 26 train tasks — **NOT SEALED**
+
+Every task in the corpus now carries a **measured** `verification.floor_tests`, written by
+`validate_tasks.py --fix-counts` rather than typed by an author. Cross-checked against
+`verify_gold_patches.py --split train`: all 26 recorded floors equal the untouched pass count.
+Train floors run 0-8; reward floor min 0.00 / mean 0.46 / max 0.58.
+
+**A validator bug found while doing it — warnings were suppressing the behaviour check.**
+The gate in front of `check_behaviour` read:
+
+```python
+if not args.no_run and schema_ok and not report.for_task(task.id):
+```
+
+`report.for_task()` returns *every* finding, warnings included. So any task carrying a warning had
+`check_behaviour` skipped entirely - and that is the function which proves a task is solvable by its
+gold patch and failable without it, **and** which measures `floor_tests`. The validator then printed
+`ok` for a task it had never actually run.
+
+Both oversized `test_update` train tasks were in exactly that state, on a `LOC_BIG` **warning**:
+their floors read `0` when the measured value is `5`, and their solvable/failable checks had not run
+in any corpus pass. The same silently applied to `bugfix_mistune_codespan_backticks` while it was
+over 300 LOC during batch 2 (it was verified separately, so its numbers stood).
+
+Fixed by gating on errors only, extracted as `blocking_errors()` so the invariant is testable, with
+`benchmark/tests/test_behaviour_gate.py` pinning it: a warning alone must not block, an error must,
+and an error mixed with warnings must still block. Nothing else about the validator changed.
+
+**Step 0 (trim the two oversized train repos) — not possible without weakening. Left as is.**
+In both tasks the two largest files *are* the graded surface, measured per file:
+
+| task | LOC | must shed | largest files |
+| --- | --- | --- | --- |
+| `testupdate_always_reversible_rename` | 346 | 47 | `more.py` 198, `tests/test_more.py` 129, `__init__.py` 19 |
+| `testupdate_funcy_omit_rename` | 376 | 77 | `colls.py` 130, `tests/test_colls.py` 112, then 5 files totalling 117 |
+
+`more.py` holds `always_reversible` — the renamed symbol the task is about — plus five helpers
+reachable from the visible suite; `tests/test_more.py` is the file the agent edits. That leaves only
+`__init__.py` (19 LOC) as non-graded, against a 47 LOC shortfall. For funcy, deleting `funcs.py`,
+`seqs.py` and `primitives.py` outright saves 62 LOC and still lands at 314 — and would break the
+`__init__` exports and the `EMPTY` sentinel `colls.py` depends on.
+
+This is the opposite of the `bugfix_mistune_codespan_backticks` case, where `Parser`/`InlineState`
+were ~100 LOC of parser machinery inside a *renderer* slice that used only `state.env`. Here there is
+no comparable dead weight, so the two `LOC_BIG` warnings are accepted as a stated limitation.
+
+**Commands run:** `validate_tasks.py --all --fix-counts` · `verify_gold_patches.py --split train` ·
+`uv run pytest`
+
+**Numbers (measured):** validator **36 tasks, 0 errors, 5 warnings**; gold patches **26/26 train
+solvable and failable**; unit tests **174 passed, 1 skipped**.
+
+**Held-out is NOT sealed.** ADR 0006 not implemented; no training run.

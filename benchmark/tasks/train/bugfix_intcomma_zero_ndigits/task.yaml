@@ -22,7 +22,7 @@ verification:
   test_files: [tests/test_number.py]
   timeout_s: 60
   n_tests: 11
-
+  floor_tests: 6
 constraints:
   allowed_write_globs:
     - "repo/humanize/**"
