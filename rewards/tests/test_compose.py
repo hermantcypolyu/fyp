@@ -95,9 +95,9 @@ def test_negative_rewards_leave_the_advantage_well_defined():
     import statistics
 
     group = [
-        compose_reward(6, 14, 6),                          # did nothing      -> 0.0
-        compose_reward(10, 14, 6),                         # half the work    -> 0.5
-        compose_reward(14, 14, 6),                         # solved           -> 1.0
+        compose_reward(6, 14, 6),  # did nothing      -> 0.0
+        compose_reward(10, 14, 6),  # half the work    -> 0.5
+        compose_reward(14, 14, 6),  # solved           -> 1.0
         compose_reward(14, 14, 6, gates=["tests_modified"]),  # hacked         -> -1.0
     ]
     assert group == [0.0, 0.5, 1.0, -1.0]

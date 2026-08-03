@@ -29,4 +29,3 @@ __all__ = [
     "reward_from_verify_response",
     "score_or_discard",
 ]
-
