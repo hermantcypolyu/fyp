@@ -186,16 +186,18 @@ reached, a scalar reward comes back, the advantage is finite, and a step complet
 OOM. Watch `nvidia-smi` throughout and record peak VRAM — that is the first real number this
 project will have about memory.
 
-> **Expect to write a rollout adapter here.** Unsloth's NeMo Gym integration is documented as
-> **single-turn** rollout RL: its `reward_fn(completions, prompts, **kwargs)` scores one
-> completion with one `/verify` POST. Our episode is multi-turn — `seed_session`, up to
-> `max_turns` tool calls, then `submit`. This is **not** a drop-in. Prototype the adapter
-> before touching hyperparameters.
+> **Expect to write a rollout adapter here — do it before any hyperparameter work.** Unsloth's
+> NeMo Gym integration is documented as **single-turn** rollout RL: its
+> `reward_fn(completions, prompts, **kwargs)` scores one completion with one `/verify` POST. Our
+> episode is multi-turn — `seed_session`, up to `max_turns` tool calls, then `submit`. This is
+> **not** a drop-in. The design, including how token ids and logprobs survive the adapter and
+> which turns receive a gradient, is specified in
+> [ADR 0007](decisions/0007-multi-turn-rollout-adapter-and-unscorable-rollouts.md).
 
-> **Do not let a failed `/verify` score.** The upstream reward function returns `0.0` when the
-> HTTP call fails or is non-200. Under ADR 0006 `0.0` is a real score — "achieved nothing" —
-> so a transport failure would enter the dataset indistinguishable from a genuine do-nothing
-> rollout. Make it raise, or record a sentinel and drop the row.
+> **A failed `/verify` must not score.** Use `rewards.transport.score_or_discard`; it returns
+> `None` on any transport failure, and `None` means *drop the rollout from the group*. Log
+> `DiscardTracker.summary()` every step and call `check()`. See
+> [Failures that look like valid scores](#failures-that-look-like-valid-scores).
 
 ---
 
@@ -203,6 +205,58 @@ project will have about memory.
 
 Only after Phases 1–5 are green. Checkpoint selection uses a **validation slice carved from
 train**. The held-out split is not touched, not inspected, and not used to choose anything.
+
+---
+
+## Failures that look like valid scores
+
+Three hazards share one signature: **the run keeps going, the loss curve looks plausible, and
+nothing errors** — while the number being optimised has quietly stopped meaning what it says.
+None of them is caught by a test that has ever gone red on this machine, so each has to be
+checked deliberately.
+
+They are grouped here because they are the same bug wearing three hats: **a value that is not a
+score is allowed to enter the reward stream as if it were one.**
+
+| # | Hazard | What collapses | Status |
+| --- | --- | --- | --- |
+| 1 | Gate constant left at `0.0` while the reward is normalised | `tests_modified` scores the same as an immediate submit — the #1 reward hack becomes free | **closed by design** — `GATE_REWARD` is derived from `REWARD_MIN` in `rewards/compose.py`, pinned by `test_a_gated_rollout_scores_below_doing_nothing` |
+| 2 | Trainer clamps or applies `max(0, r)` | every `-1.0` gate lands on `0.0` == "did nothing"; hazard 1 returns from outside our code | **OPEN — blocking.** Carry-forward item 4 |
+| 3 | Failed `/verify` scored as `0.0` | counterfeit do-nothing rollouts enter the group, shifting the mean and σ that GRPO normalises against | **closed in our code** — `rewards/transport.py`; must be honoured by the adapter |
+
+**Why `0.0` is the common thread.** Before ADR 0006, `0.0` was a safe fallback: it sat below every
+task's floor, so anything that produced it was obviously bad. After normalisation `0.0` is a
+*real, correct, common* score — exactly what a do-nothing rollout earns. Every place that used to
+default to zero is now a place that fabricates a plausible sample.
+
+Both reference implementations do exactly this, which is why hazard 3 is not hypothetical:
+
+```python
+# unslothai/notebooks, NeMo-Gym-Multi-Environment.ipynb
+reward = resp.json().get("reward", 0.0) if resp.status_code == 200 else 0.0
+
+# NVIDIA-NeMo/Gym, responses_api_agents/verifiers_agent/app.py
+reward = rollout_output.get("reward", 0.0) or 0.0
+```
+
+**What to do about each**
+
+- **Hazard 2** — read the trainer's reward path end to end before the first real run. Inject a
+  deliberately gated rollout (end without `submit`) and assert its advantage is the most negative
+  in its group. **If the trainer clamps, fix the trainer. Never raise `GATE_REWARD`** — that
+  re-opens hazard 1 from the other direction.
+- **Hazard 3** — the adapter must call `rewards.transport.score_or_discard`, which returns `None`
+  on any transport failure. `None` means **drop the rollout from the group**, TRL's own contract
+  for an unscorable rollout. Log `DiscardTracker.summary()` every step and call `check()`; a
+  discard rate above 2% stops the run, because the rollouts that did score are then a biased
+  sample of a dying environment.
+- **Hazard 1** — already closed, but `make check` must stay green; the coupling test is what keeps
+  it closed.
+
+There is a fourth member of this family worth knowing about: NeMo Gym's `verifiers_agent` emits a
+placeholder turn with `generation_token_ids=[0]` when a rollout produced no trainable tokens,
+logging a warning and continuing. Same shape — a fabricated row that trains. Our adapter should
+discard instead. See [ADR 0007](decisions/0007-multi-turn-rollout-adapter-and-unscorable-rollouts.md).
 
 ---
 

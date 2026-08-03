@@ -111,6 +111,11 @@ question about the surrounding implementation, not the algorithm. `rewards/tests
 test_compose.py` already checks the arithmetic locally — a mixed group `[0.0, 0.5, 1.0, -1.0]`
 has non-zero σ, produces no NaN, and puts the gated rollout at the most negative advantage.
 
+This is **hazard 2 of three** that share a failure signature. See
+[Failures that look like valid scores](RUN_ON_A5000.md#failures-that-look-like-valid-scores) for
+the full set — the third is a failed `/verify` being scored as `0.0`, closed in this repo by
+`rewards/transport.py` and [ADR 0007](decisions/0007-multi-turn-rollout-adapter-and-unscorable-rollouts.md).
+
 **Verify on Linux, before training:** read the trainer's reward path end to end and confirm a
 `-1.0` survives from `verify()` to the advantage unchanged. A cheap direct check is to inject
 a deliberately gated rollout (end an episode without `submit`) into a single-step run and

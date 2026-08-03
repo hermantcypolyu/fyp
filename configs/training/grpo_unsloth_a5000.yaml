@@ -152,12 +152,21 @@ integration_risk:
   # a NeMo Gym agent harness that already does. Budget real time for this; it is the
   # first thing to prototype on the A5000, before any hyperparameter thinking.
   multi_turn_adapter_required: true
+  adr: docs/decisions/0007-multi-turn-rollout-adapter-and-unscorable-rollouts.md
   reward_fn_default_on_failure: 0.0
   # [S3]'s reward_fn returns 0.0 when the HTTP call fails or is non-200:
   #     reward = resp.json().get("reward", 0.0) if resp.status_code == 200 else 0.0
-  # Under ADR 0006, 0.0 is a meaningful score — "achieved nothing" — so a network
-  # failure is indistinguishable from a do-nothing rollout and silently enters the
-  # dataset. Make transport failure raise or record a sentinel; do not let it score.
+  # NeMo Gym's own verifiers_agent does the same: `rollout_output.get("reward", 0.0) or 0.0`.
+  # Under ADR 0006, 0.0 is a meaningful score - "achieved nothing" - so a network failure is
+  # indistinguishable from a do-nothing rollout and silently enters the dataset.
+  #
+  # RESOLVED in this repo, and the adapter MUST use it:
+  #   rewards.transport.score_or_discard(...) -> float | None
+  #   None means DROP the rollout from the group, never score it.
+  #   rewards.transport.DiscardTracker logs the discard rate every step and fails past 2%.
+  # This matches TRL's own contract for `rollout_reward_fn` (float | None).
+  transport_failure_policy: discard_never_score
+  max_discard_rate: 0.02
 
 # --------------------------------------------------------------------------- VRAM
 vram_levers:

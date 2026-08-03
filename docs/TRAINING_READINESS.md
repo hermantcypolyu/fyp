@@ -134,12 +134,15 @@ Every one of these is an assumption that has never executed.
 1. **The Unsloth × NeMo Gym integration is documented as _single-turn_ rollout RL.** Its reward
    function scores one completion with one `/verify` POST. **Our episode is multi-turn** —
    `seed_session`, up to `max_turns` tool calls, then `submit`. This is **not a drop-in**; a rollout
-   adapter is needed. This is the largest unknown in the project and the first thing to prototype.
+   adapter is needed. Specified in
+   [ADR 0007](decisions/0007-multi-turn-rollout-adapter-and-unscorable-rollouts.md) and to be
+   built **before any hyperparameter work**.
 2. **Negative rewards through the trainer.** If anything clamps or relu's the reward, the `-1.0`
    gates collapse onto `0.0` and the reward-hack deterrent disappears silently. Carry-forward item 4.
-3. **A failed `/verify` scores `0.0` upstream**, which under ADR 0006 is a real score
-   ("achieved nothing"), so transport failures would be indistinguishable from genuine do-nothing
-   rollouts in the dataset.
+3. **A failed `/verify` must not score.** Resolved in this repo by `rewards/transport.py`
+   (`score_or_discard` returns `None`; `None` drops the rollout), but the adapter must honour it.
+   Grouped with the other two in
+   [Failures that look like valid scores](RUN_ON_A5000.md#failures-that-look-like-valid-scores).
 4. **`max_seq_length: 8192`** — the upstream notebook uses 4096, measured on an H100 (80 GB).
 5. **`gradient_accumulation_steps: 16`** — upstream uses 64; this changes effective batch size and
    learning dynamics.

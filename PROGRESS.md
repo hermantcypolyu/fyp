@@ -872,3 +872,68 @@ reward-hack deterrent disappears with no error. The fix is in the trainer — **
 ruff **0 findings**.
 
 **No training run. No weights downloaded. No GPU touched.**
+
+---
+
+## 2026-08-03 · ADR 0007 · rollout adapter specified, transport sentinel implemented
+
+**Transport failure now returns a sentinel, never a score.** `rewards/transport.py`:
+
+- `reward_from_verify_response()` **raises** on a non-200, a missing / `null` / non-numeric /
+  `bool` / non-finite `reward`, or a non-object body. No default, no fallback.
+- `score_or_discard()` returns `None` — meaning **drop the rollout from the group**, not score it
+  zero.
+- `DiscardTracker` logs `summary()` every step and `check()` raises `DiscardRateTooHigh` past 2%
+  (min 20 samples), because a rising discard rate means the surviving rollouts are a biased sample
+  of a dying environment.
+- 44 new tests, including a 500 that *carries* a reward body, `bool`, `NaN`, `inf` and a list body.
+
+`None` is not invented: it is TRL's own contract for `rollout_reward_fn` — "return `None` to mark
+the rollout unscorable so it is dropped from the group baseline instead of being counted as a
+zero" — and for `HarnessRolloutOutcome.env_reward`.
+
+**Both upstream reference implementations default to `0.0` on failure**, which is exactly the
+hazard: `resp.json().get("reward", 0.0) if status_code == 200 else 0.0` (Unsloth notebook) and
+`rollout_output.get("reward", 0.0) or 0.0` (NeMo Gym `verifiers_agent`). Before ADR 0006 that was
+safe — `0.0` sat below every floor. After normalisation `0.0` is a *correct, common* score, so
+every zero-default is now a place that fabricates a plausible sample.
+
+**Three hazards grouped in the runbook under "failures that look like valid scores"**, since they
+share one signature — the run continues, the curve looks plausible, nothing errors:
+
+| # | Hazard | Status |
+| --- | --- | --- |
+| 1 | gate constant left at `0.0` under a normalised reward | closed by design (`GATE_REWARD` derived from `REWARD_MIN`) |
+| 2 | trainer clamps / `max(0, r)` | **OPEN, blocking** — carry-forward item 4 |
+| 3 | failed `/verify` scored as `0.0` | closed in our code; the adapter must honour it |
+
+A fourth relative is recorded: `verifiers_agent` emits a placeholder turn with
+`generation_token_ids=[0]` when a rollout produces no trainable tokens, warns, and continues. Same
+shape; our adapter should discard.
+
+**ADR 0007 specifies the rollout adapter** — accepted, and to be built *before* any hyperparameter
+work:
+
+- **one rollout = one session = one GRPO group member**; turns do not become group members;
+- **the trace is captured by a transparent proxy inside the sandbox** recording each turn's token
+  ids and logprobs, per TRL's loop-owning harness path — whose worked example, `opencode`, is a
+  coding agent scored by "the fraction of held-out tests that passed";
+- **token ids and logprobs survive** as `TraceEntry.completion_token_ids` / `per_token_logps`,
+  requiring vLLM's `--return-tokens-as-token-ids` and `--logprobs-mode processed_logprobs`
+  (NeMo Gym reaches the same place via `return_token_id_information: true` and
+  `verifiers_agent._tok_kwargs`). Re-tokenising a rendered transcript is **not** the sequence the
+  policy emitted, so concatenation is unsound — that is why this matters;
+- **tool results must not be reinforced** — `train_turn_fn` / `tool_mask`; start from
+  "reinforce turns that called a tool".
+
+Trainer choice left open on purpose: TRL's loop-owning path fits our architecture almost exactly
+but is `trl.experimental`, and is **not** the path Unsloth's NeMo Gym integration documents
+(single-turn `GRPOTrainer`). Whether Unsloth composes with `AsyncGRPOTrainer` is unverified and is
+the prototype's first question.
+
+**Commands run:** `uv run pytest` · `ruff check .` · config parse · `check_heldout_seal.py`
+
+**Numbers (measured):** unit tests **232 passed, 1 skipped**; ruff **0 findings**; configs parse;
+seal **intact**.
+
+**No training run. No weights downloaded. No GPU touched.**
