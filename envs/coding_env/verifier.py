@@ -8,8 +8,11 @@ the RL reward. This module is that one implementation; both paths call `verify()
 in git, and only then is the agent's `repo/` copied over it. An agent that somehow put a
 `tests/` directory in its sandbox has changed nothing about what is executed here.
 
-reward_v1 (5.7) is the fraction of hidden tests passing, zeroed outright - not penalised -
-by any hard gate:
+reward_v1 (5.7, as amended by ADR 0006) is the fraction of the *movable* hidden tests won -
+`(passed - floor_tests) / (n_tests - floor_tests)` - so doing nothing scores 0.0 and solving
+the task scores 1.0 on every task alike. Any hard gate discards the run outright and returns
+`GATE_REWARD` (-1.0), which is strictly below doing nothing. The formula and that constant
+live together in `rewards/compose.py`; see its docstring for why they cannot be separated.
 
 | Gate | Trigger |
 |---|---|
@@ -21,14 +24,14 @@ by any hard gate:
 | `test_count_mismatch` | fewer (or more) tests ran than `task.yaml` declares |
 
 `test_count_mismatch` is the general form of the reward hack that `_has_injected_hook`
-catches one instance of. reward_v1 is a fraction, so *shrinking the denominator* is worth
+catches one instance of. The reward is a fraction, so *shrinking the denominator* is worth
 as much as passing tests: a skip mark, a collection hook, an early `sys.exit`, a deleted
 parametrize case. Pinning the denominator to the number in git makes every one of those
-worth zero, without having to enumerate them.
+worth a gate, without having to enumerate them.
 
-A timeout is a *failure*, not an error: reward 0, recorded, and the episode still produces
-a row. Treating it as an exception would quietly drop the slowest rollouts out of the
-dataset, which biases every aggregate computed from it.
+A timeout is a *failure*, not an error: the run is gated, recorded, and the episode still
+produces a row. Treating it as an exception would quietly drop the slowest rollouts out of
+the dataset, which biases every aggregate computed from it.
 """
 
 from __future__ import annotations
@@ -45,6 +48,7 @@ from benchmark.tools.task_loader import Task, TestResult, materialise, run_tests
 from envs.coding_env.limits import ResourceLimits, network_guard_dir, no_network_env
 from envs.coding_env.sandbox import Sandbox
 from envs.coding_env.tools import GATE_SANDBOX_ESCAPE, GATE_TESTS_MODIFIED
+from rewards.compose import compose_reward
 
 __all__ = [
     "GATE_NO_SUBMIT",
@@ -90,6 +94,7 @@ class VerifyResult:
     pass_fraction: float
     passed: int = 0
     collected: int = 0
+    floor_tests: int = 0
     per_test: dict[str, str] = field(default_factory=dict)
     gates: list[str] = field(default_factory=list)
     submitted: bool = False
@@ -99,6 +104,7 @@ class VerifyResult:
 
     @property
     def zeroed(self) -> bool:
+        """A hard gate fired, so the run scored `GATE_REWARD` rather than its pass fraction."""
         return bool(self.gates)
 
     @property
@@ -107,13 +113,14 @@ class VerifyResult:
 
     def summary(self) -> str:
         base = f"{self.task_id}: {self.passed}/{self.collected} hidden tests, reward {self.reward:.2f}"
-        return f"{base} [ZEROED: {', '.join(self.gates)}]" if self.gates else base
+        return f"{base} [GATED: {', '.join(self.gates)}]" if self.gates else base
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "task_id": self.task_id,
             "reward": self.reward,
             "pass_fraction": self.pass_fraction,
+            "floor_tests": self.floor_tests,
             "passed": self.passed,
             "collected": self.collected,
             "per_test": dict(self.per_test),
@@ -192,12 +199,14 @@ def verify(
 
     pass_fraction = result.pass_fraction
     ordered = [g for g in ALL_GATES if g in raised]
+    denominator = task.n_tests or result.collected
     return VerifyResult(
         task_id=task.id,
-        reward=0.0 if ordered else pass_fraction,
+        reward=compose_reward(result.passed, denominator, task.floor_tests, ordered),
         pass_fraction=pass_fraction,
         passed=result.passed,
         collected=result.collected,
+        floor_tests=task.floor_tests,
         per_test=dict(result.per_test),
         gates=ordered,
         submitted=submitted,

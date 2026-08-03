@@ -167,6 +167,7 @@ def _result_from_json(scored: dict[str, Any]) -> VerifyResult:
         pass_fraction=scored["pass_fraction"],
         passed=scored["tests_passed"],
         collected=scored["tests_total"],
+        floor_tests=scored["floor_tests"],
         per_test=scored["per_test"],
         gates=scored["gates"],
         submitted=scored["submitted"],

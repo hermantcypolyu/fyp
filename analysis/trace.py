@@ -36,7 +36,7 @@ from analysis import versions
 __all__ = ["SCHEMA_PATH", "SCHEMA_VERSION", "TraceError", "build_row", "read_jsonl", "validate_row", "write_jsonl"]
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "trace_schema.json"
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 #: Tool arguments and outputs are truncated here, not in the tools: the agent saw the full
 #: text, and pretending otherwise would misrepresent the episode. `output_chars` keeps the
@@ -152,6 +152,7 @@ def build_row(
             "pass_fraction": result.pass_fraction,
             "tests_passed": result.passed,
             "tests_total": result.collected,
+            "floor_tests": result.floor_tests,
             "gates": list(result.gates),
             "submitted": result.submitted,
             "per_test": dict(result.per_test),

@@ -677,3 +677,70 @@ no comparable dead weight, so the two `LOC_BIG` warnings are accepted as a state
 solvable and failable**; unit tests **174 passed, 1 skipped**.
 
 **Held-out is NOT sealed.** ADR 0006 not implemented; no training run.
+
+---
+
+## 2026-08-03 · Step 2 · ADR 0006 implemented — reward normalised, gates to −1.0 — **NOT SEALED**
+
+ADR 0006 moved to **Accepted**, and all three of its coupled points landed in **one commit**:
+the formula, the widened range, and the gate constant.
+
+```
+reward_v1 = (passed - floor_tests) / (n_tests - floor_tests)    ∈ [-1, 1]
+gates                                                           = -1.0
+```
+
+**Measured across all 36 tasks after the change:**
+
+| | before | after |
+| --- | --- | --- |
+| do-nothing (`passed == floor_tests`) | 0.467 mean, 0.00–0.58 | **0.0 on every task** |
+| gold (`passed == n_tests`) | 1.0 | **1.0 on every task** |
+| gated rollout, even when fully solved | 0.0 | **−1.0** |
+
+A partial fix now reads as a fraction of the *movable* work. On the ten held-out tasks
+(headroom 6–9), winning one test scores **0.11–0.17**, winning half the movable tests scores
+**0.43–0.50**, and breaking one test that passed untouched scores **−0.11 to −0.17**. Under the raw
+scale those same rollouts were compressed into a narrow band above 0.38–0.62 and could never go
+negative.
+
+**Why the coupling was load-bearing.** Before, a gate returned 0.0, far below every task's floor,
+so writing to `tests/**` was strictly worse than doing nothing. After normalisation `0.0` *is*
+doing nothing — so shipping the formula alone would have made the #1 reward hack score exactly
+what an immediate submit scores. Nothing would have errored and no test would have gone red.
+Two mechanical safeguards, both required by the ADR:
+
+- `rewards/compose.py` defines the scale once and **derives** `GATE_REWARD` from `REWARD_MIN`,
+  so the constant cannot be left behind when the formula changes.
+- `rewards/tests/test_compose.py::test_a_gated_rollout_scores_below_doing_nothing` asserts
+  `GATE_REWARD < normalised_reward(p = floor_tests)` across five task shapes.
+
+**Negative rewards are safe in the advantage computation.** No advantage code exists yet — GRPO's
+$(r-\mu_g)/\sigma_g$ is specified in ADR 0006 and `docs/vram_notes.md` but unimplemented — so the
+check is that nothing downstream assumes $r \ge 0$. Audited: the trace schema bounded `reward`
+implicitly and now states `[-1, 1]` explicitly; `pass_fraction` keeps its `[0,1]` bound because it
+is still the raw fraction; the `/verify` response model is unbounded. A unit test covers the
+arithmetic directly — a mixed group `[0.0, 0.5, 1.0, −1.0]` has non-zero σ, produces no NaN, and
+puts the gated rollout at the most negative advantage. Group normalisation is sign-agnostic; the
+wider range strictly *increases* spread, which is the intended effect.
+
+**Trace schema bumped `1` → `2`**: `reward` range widened and `result.floor_tests` added, so every
+rollout's reward is reconstructible from the raw measurement. `read_jsonl` deliberately does not
+validate, so the two existing v1 smoke traces stay readable.
+
+**Transports.** `--transport direct` re-run and verified: reward **1.0**, `floor_tests` 7, v2 trace
+written. `--transport gym` **could not be re-run on this machine** — `nemo-gym` depends on `uvloop`,
+which has no Windows build (ADR 0002), so the extra does not install here. That path is verified the
+way the rest of the gym surface already is, statically: a new contract test asserts
+`CodingVerifyResponse` declares `floor_tests` **and** that `app.py` populates it from the result,
+because a dropped field would silently make every gym-side reward the raw pass fraction again — the
+exact regression this ADR exists to prevent, on one transport only. `results/raw/b3_smoke/
+rollouts_gym.jsonl` remains a **v1 artefact from B3 and must be regenerated on Linux/macOS**; its
+headline reward is unaffected, since a gold rollout scores 1.0 under both the old and new formulas.
+
+**Commands run:** `uv run pytest` · `ruff check .` · `smoke_one_task.py --transport direct`
+
+**Numbers (measured):** unit tests **191 passed, 1 skipped** (16 new reward tests); ruff **0
+findings**; direct smoke **reward 1.0**.
+
+**Held-out is NOT sealed.** No training run; no weights downloaded.

@@ -1,8 +1,8 @@
 # 0006 — Normalise reward against the measured per-task floor
 
-- **Status:** **Proposed** — not implemented, awaiting approval
-- **Date:** 2026-08-01
-- **Milestone:** raised in B2, would be implemented in B4
+- **Status:** **Accepted** — implemented 2026-08-03
+- **Date:** 2026-08-01 (accepted 2026-08-03)
+- **Milestone:** raised in B2, implemented in B4
 - **Affects:** `AGENT_BUILD_SPEC.md` §5.7 (`reward_v1`), §5.6 (one verifier for eval and
   reward), `benchmark/schema/task.schema.json`, `rewards/compose.py`
 
@@ -200,16 +200,38 @@ Reporting both costs nothing and makes every figure reconstructible either way.
 
 ## Decision
 
-**None yet.** Proposed for approval. Nothing above is implemented; `reward_v1` remains the raw
-pass fraction as specified in §5.7, and B2's numbers are unaffected.
+**Accepted 2026-08-03, all three points, implemented in a single commit.**
 
-Three things need an explicit yes/no, because they amend the spec rather than merely add to it:
+1. Reward range extends from $[0,1]$ to $[-1,1]$ — **yes**. `normalised_reward()` clamps at
+   $-1$ rather than at $0$, so "made it worse" and "did nothing" stay distinguishable.
+2. Hard-zero gates yield $-1.0$ rather than $0.0$ — **yes**, and shipped in the same commit as
+   point 1, as the coupling constraint requires. `GATE_REWARD` is *derived* from `REWARD_MIN`
+   in `rewards/compose.py` rather than written out again, so the two cannot drift apart, and
+   `rewards/tests/test_compose.py::test_a_gated_rollout_scores_below_doing_nothing` asserts
+   `GATE_REWARD < normalised_reward(p = c)` across five task shapes.
+3. `task.yaml` gains `verification.floor_tests` — **yes**, backfilled as a *measured* value for
+   all 36 tasks by `validate_tasks.py --fix-counts` and cross-checked against
+   `verify_gold_patches.py`.
 
-1. Reward range extends from $[0,1]$ to $[-1,1]$ (consequence (a)).
-2. Hard-zero gates yield $-1.0$ rather than $0.0$ (consequence (b)). **Items 1 and 2 are coupled:
-   approving normalisation without the gate move is not a partial approval, it is a regression —
-   see the coupling constraint above. They ship together or not at all.**
-3. `task.yaml` gains a second validator-measured field (`floor_tests`).
+### As implemented
+
+| where | what |
+| --- | --- |
+| `rewards/compose.py` | the scale, the formula, and `GATE_REWARD` derived from its bottom |
+| `envs/coding_env/verifier.py` | calls `compose_reward()`; carries `floor_tests` on `VerifyResult` |
+| `envs/coding_env/app.py` | `floor_tests` added to the `/verify` wire format |
+| `analysis/trace_schema.json` | `schema_version` `1` → `2`; `reward` range `[-1,1]`; `floor_tests` recorded |
+
+The denominator is `task.n_tests` — the count in git, not the count that ran — so shrinking it
+still cannot pay; that hack is caught by `test_count_mismatch` and now costs $-1.0$.
+
+Measured on the 36-task corpus after the change: do-nothing scores exactly $0.0$ and gold
+exactly $1.0$ on **every** task, against a raw do-nothing mean of $0.467$ before. A gated
+rollout scores $-1.0$ even when it solved the task outright.
+
+One deviation from the sketch: `reward_raw` is not added as a new field, because
+`result.pass_fraction` already *is* $p/n$ and was already recorded per rollout. Adding a second
+name for the same number would have created two things to keep in sync for no gain.
 
 ## Consequences if accepted
 

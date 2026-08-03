@@ -1,7 +1,7 @@
+import shutil
+from datetime import date
 from pathlib import Path
 from textwrap import dedent
-from datetime import date
-import shutil
 
 root = Path('benchmark/tasks/heldout')
 root.mkdir(parents=True, exist_ok=True)

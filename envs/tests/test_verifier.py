@@ -27,6 +27,7 @@ from envs.coding_env.verifier import (
     verify,
     verify_sandbox,
 )
+from rewards.compose import GATE_REWARD
 
 TASK_ID = "bugfix_metric_zero_domain_error"
 
@@ -69,6 +70,17 @@ def test_unsolved_task_scores_below_one(sb):
 
 
 @pytest.mark.slow
+def test_doing_nothing_scores_exactly_zero(sb):
+    """ADR 0006: the do-nothing plateau sits at 0.0, not at the task's floor."""
+    sb.toolbox.submit()
+    result = verify_sandbox(sb)
+    assert result.gates == []
+    assert result.passed == sb.task.floor_tests
+    assert result.reward == 0.0
+    assert result.pass_fraction > 0.0  # the raw measurement still shows the floor
+
+
+@pytest.mark.slow
 def test_verifier_ignores_tests_planted_in_the_sandbox(sb):
     """Grading reads the pristine suite from the corpus, never the sandbox's copy."""
     (sb.root / "tests").mkdir()
@@ -88,7 +100,7 @@ def test_no_submit_zeroes_a_correct_solution(sb):
     _solve(sb)
     result = verify_sandbox(sb)
     assert result.gates == [GATE_NO_SUBMIT]
-    assert result.reward == 0.0
+    assert result.reward == GATE_REWARD
     assert result.pass_fraction == 1.0  # kept, so gate cost is measurable
 
 
@@ -99,7 +111,7 @@ def test_tests_modified_zeroes_a_correct_solution(sb):
     sb.toolbox.submit()
     result = verify_sandbox(sb)
     assert GATE_TESTS_MODIFIED in result.gates
-    assert result.reward == 0.0
+    assert result.reward == GATE_REWARD
 
 
 @pytest.mark.slow
@@ -108,7 +120,7 @@ def test_syntax_broken_gate(sb):
     sb.toolbox.submit()
     result = verify_sandbox(sb)
     assert GATE_SYNTAX_BROKEN in result.gates
-    assert result.reward == 0.0
+    assert result.reward == GATE_REWARD
 
 
 @pytest.mark.slow
@@ -118,16 +130,16 @@ def test_injected_pytest_hook_is_caught(sb):
     sb.toolbox.submit()
     result = verify_sandbox(sb)
     assert GATE_TESTS_MODIFIED in result.gates
-    assert result.reward == 0.0
+    assert result.reward == GATE_REWARD
 
 
 def test_timeout_is_a_scored_failure_not_an_error(sb):
-    """A wall-clock overrun produces a row with reward 0, not an exception."""
+    """A wall-clock overrun produces a scored row, not an exception."""
     sb.toolbox.submit()
     result = verify(sb.task, sb.repo_dir, submitted=True, limits=ResourceLimits(wall_clock_s=0))
     assert result.timed_out
     assert result.gates == [GATE_TIMEOUT]
-    assert result.reward == 0.0
+    assert result.reward == GATE_REWARD
 
 
 @pytest.mark.slow
@@ -142,7 +154,7 @@ def test_test_count_mismatch_zeroes_even_a_perfect_run(sb):
     _solve(sb)
     result = verify(fresh, sb.repo_dir, submitted=True)
     assert GATE_TEST_COUNT_MISMATCH in result.gates
-    assert result.reward == 0.0
+    assert result.reward == GATE_REWARD
     assert result.pass_fraction == 1.0  # the work was right; the run was still invalid
 
 

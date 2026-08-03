@@ -104,6 +104,11 @@ class Task:
     def n_tests(self) -> int:
         return int(self.data.get("verification", {}).get("n_tests", 0))
 
+    @property
+    def floor_tests(self) -> int:
+        """Hidden tests that already pass untouched - the do-nothing score (ADR 0006)."""
+        return int(self.data.get("verification", {}).get("floor_tests", 0))
+
     def gold_patch(self) -> str:
         if not self.gold_patch_path.is_file():
             raise TaskError(f"{self.id}: missing solution/gold.patch")

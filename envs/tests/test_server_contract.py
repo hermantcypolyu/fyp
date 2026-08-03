@@ -92,6 +92,22 @@ def test_verify_goes_through_the_one_shared_verifier():
     assert ours == {"envs.coding_env.session"}, f"app.py must reach the verifier only via session: {ours}"
 
 
+def test_verify_response_carries_the_reward_floor():
+    """ADR 0006: reward is meaningless without `floor_tests`, so the wire format must carry it.
+
+    The gym transport rebuilds `VerifyResult` from this response
+    (`smoke_one_task._result_from_json`). If the field were dropped, the reconstructed row
+    would silently read `floor_tests = 0` and every gym-side reward would be the raw pass
+    fraction again - the exact regression ADR 0006 exists to prevent, on one transport only.
+    """
+    response = _class(_tree("app.py"), "CodingVerifyResponse")
+    annotated = {n.target.id for n in response.body if isinstance(n, ast.AnnAssign)}
+    assert {"floor_tests", "tests_passed", "tests_total", "pass_fraction"} <= annotated
+
+    populated = (ENV_DIR / "app.py").read_text(encoding="utf-8")
+    assert "floor_tests=result.floor_tests" in populated
+
+
 def test_app_is_the_only_place_the_environment_touches_nemo_gym():
     offenders = []
     for path in ENV_DIR.rglob("*.py"):

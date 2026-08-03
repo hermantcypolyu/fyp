@@ -111,6 +111,7 @@ class CodingVerifyResponse(BaseVerifyResponse):
     pass_fraction: float
     tests_passed: int
     tests_total: int
+    floor_tests: int
     per_test: dict[str, str]
     gates: list[str]
     submitted: bool
@@ -158,6 +159,7 @@ class CodingResourcesServer(SimpleResourcesServer):
             pass_fraction=result.pass_fraction,
             tests_passed=result.passed,
             tests_total=result.collected,
+            floor_tests=result.floor_tests,
             per_test=result.per_test,
             gates=result.gates,
             submitted=result.submitted,

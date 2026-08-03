@@ -23,8 +23,8 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "1",
-      "description": "Bumped on any breaking change, so an old results/ directory stays readable."
+      "const": "2",
+      "description": "Bumped on any breaking change, so an old results/ directory stays readable. v2: ADR 0006 widened reward to [-1,1] and added result.floor_tests."
     },
     "run_id": { "type": "string", "minLength": 1 },
     "rollout_id": {
@@ -118,6 +118,7 @@
         "pass_fraction",
         "tests_passed",
         "tests_total",
+        "floor_tests",
         "gates",
         "submitted",
         "per_test"
@@ -125,16 +126,23 @@
       "properties": {
         "reward": {
           "type": "number",
-          "description": "reward_v1 (spec 5.7): pass_fraction, or 0.0 if any gate fired. ADR 0006 proposes widening the range to [-1,1]; that would bump schema_version."
+          "minimum": -1,
+          "maximum": 1,
+          "description": "reward_v1 (spec 5.7 as amended by ADR 0006): (tests_passed - floor_tests) / (tests_total - floor_tests), clamped to [-1,1]; or -1.0 if any gate fired. 0.0 means the run achieved nothing, 1.0 means solved."
         },
         "pass_fraction": {
           "type": "number",
           "minimum": 0,
           "maximum": 1,
-          "description": "Kept alongside a zeroed reward so the cost of each gate is measurable."
+          "description": "The raw pass fraction (the pre-ADR-0006 reward), kept unnormalised so the cost of each gate stays measurable and old tables stay reconstructible."
         },
         "tests_passed": { "type": "integer", "minimum": 0 },
         "tests_total": { "type": "integer", "minimum": 0 },
+        "floor_tests": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Hidden tests already passing against the untouched repo - the do-nothing score. Recorded per rollout so reward is reconstructible from the raw measurement."
+        },
         "gates": {
           "type": "array",
           "items": {

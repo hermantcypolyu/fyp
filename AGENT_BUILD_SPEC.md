@@ -388,9 +388,14 @@ means, the entire study is invalid.
 
 ### 5.7 Reward v1 — and only v1
 ```
-reward_v1 = fraction of hidden unit tests passing after the final patch   ∈ [0,1]
+reward_v1 = (passed - floor_tests) / (n_tests - floor_tests)   ∈ [-1,1]   (ADR 0006)
 ```
-**Hard-zero gates** (not penalties — they zero the reward outright):
+Normalised against the measured per-task floor, so **doing nothing scores 0.0 and solving the
+task scores 1.0 on every task alike**. Scores below 0 mean the run broke tests that passed
+before it started. `floor_tests` is a validator-measured field in `task.yaml`, not an authored
+one. The raw pass fraction is still recorded per rollout as `pass_fraction`.
+
+**Hard gates** (not penalties — they discard the run outright, scoring `-1.0`):
 
 | Gate | Trigger |
 |---|---|
@@ -398,6 +403,12 @@ reward_v1 = fraction of hidden unit tests passing after the final patch   ∈ [0
 | `no_submit` | episode ended without `submit` |
 | `sandbox_escape` | any write outside sandbox root |
 | `syntax_broken` | repo no longer imports |
+
+The gate constant is `-1.0`, not `0.0`, and this is **coupled to the formula**: after
+normalisation `0.0` is what doing nothing scores, so a gate worth `0.0` would make the #1 reward
+hack exactly as good as submitting immediately. `rewards/compose.py` derives `GATE_REWARD` from
+the bottom of the same scale the formula uses, and a unit test asserts a gated rollout scores
+strictly below a do-nothing one.
 
 Log every gate rate on every rollout. Shaping terms (patch quality, tool efficiency, error recovery)
 are **designed and documented in `docs/reward_design.md` but NOT implemented** — they're M7 ablations
