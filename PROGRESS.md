@@ -744,3 +744,70 @@ headline reward is unaffected, since a gold rollout scores 1.0 under both the ol
 findings**; direct smoke **reward 1.0**.
 
 **Held-out is NOT sealed.** No training run; no weights downloaded.
+
+---
+
+## 2026-08-03 · Step 3 · **HELD-OUT SEALED** · B4
+
+| | |
+| --- | --- |
+| Sealed | 2026-08-03 |
+| Held-out tree SHA | `318fedc8868bcdd46f24dd78793a5c136be54400` |
+| Last commit to modify the split | `ad46f8746a1db72cc925dd656fdb1b7a5ed85d47` |
+| Sealing commit | recorded in the follow-up commit — see "Why the anchor is a tree hash" below |
+| Record | `benchmark/heldout_seal.json`, `docs/heldout_seal.md` |
+| Enforcement | `scripts/check_heldout_seal.py`, wired into `make check` |
+
+**From this point, for the rest of the project: no edits, no inspection, no use for
+checkpoint selection, no use for hyperparameter tuning.** The split is not read, browsed or
+sampled; per-task held-out results are not examined to form hypotheses; held-out reward never
+chooses a checkpoint, triggers early stopping, or tunes a learning rate, group size, KL
+coefficient, turn budget or prompt. It is measured once, at the end, and reported whatever it
+says. **Checkpoint selection and all tuning use a validation slice carved from `train` only** —
+the 26 train tasks are the entire model-selection budget.
+
+**Why the anchor is a tree hash, not a commit SHA.** A commit cannot contain its own SHA, so
+"the sealing commit" cannot be the thing the check compares against without a circular
+reference. The git *tree* hash of `benchmark/tasks/heldout/` has neither problem: it is
+content-addressed over every byte of the split and nothing else, so it survives later commits
+to documentation or reward code, and it changes the instant a task is edited, added or
+deleted. The sealing commit SHA is recorded above for provenance, in the commit immediately
+after the seal itself.
+
+**The check fails on both routes, verified rather than assumed:**
+
+- recorded tree ≠ committed tree → `HELD-OUT SEAL BROKEN ... has changed since it was sealed`;
+- committed tree matches but the working copy is dirty → also fails, because a graded run
+  against uncommitted edits would not be scoring the sealed split.
+
+Both were exercised by tampering and reverting. The failure message says explicitly that the
+fix is to restore the split, **not** to update `heldout_seal.json` — editing the recorded hash
+destroys the only evidence that the held-out numbers were measured on a split nobody had tuned
+against.
+
+Contamination is worth enforcing in code precisely because it is silent: nothing errors, the
+tasks still validate, the rewards still look plausible, and every generalisation claim
+afterwards is a training-set claim wearing a held-out label.
+
+**`docs/A5000_CARRY_FORWARD.md` written** — everything specified and committed here that has
+**never executed on this machine**, with the exact Linux check for each:
+
+1. `ResourceLimits.enforced()` — four `setrlimit` caps have never constrained a process
+   (`resource` is POSIX-only; `enforced()` reports all four `False` on Windows).
+2. gym transport end to end — `uvloop` has no Windows build, so `app.py` cannot even be
+   imported here; only asserted statically via `ast`.
+3. Regenerate `results/raw/b3_smoke/rollouts_gym.jsonl` at trace schema **v2** — it is the last
+   v1 artefact left.
+4. Confirm the v2 reward range `[-1, 1]` survives the trainer's advantage computation. Flagged
+   as the highest-risk item: a clamp or `max(0, r)` anywhere in the reward pipeline would
+   silently collapse `-1.0` gates onto `0.0`, reinstating exactly the hazard ADR 0006's
+   coupling constraint exists to prevent — and the fix would be in the trainer, never by
+   raising `GATE_REWARD`.
+
+**Commands run:** `check_heldout_seal.py` (pass, and both failure paths) · `uv run pytest` ·
+`ruff check .` · `validate_tasks.py --all --no-run`
+
+**Numbers (measured):** seal check **pass**, `318fedc8868b` unchanged; unit tests **191 passed,
+1 skipped**; ruff **0 findings**; validator **36 tasks, 0 errors**.
+
+**No training run. No weights downloaded. No checkpoint exists.**

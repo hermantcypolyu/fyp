@@ -1,0 +1,9 @@
+{
+  "sealed": true,
+  "sealed_on": "2026-08-03",
+  "milestone": "B4",
+  "heldout_tree_sha": "318fedc8868bcdd46f24dd78793a5c136be54400",
+  "content_commit": "ad46f8746a1db72cc925dd656fdb1b7a5ed85d47",
+  "n_tasks": 10,
+  "note": "heldout_tree_sha is `git rev-parse HEAD:benchmark/tasks/heldout` - the content hash of the sealed split. It is checked by scripts/check_heldout_seal.py on every `make check`. content_commit is the last commit that modified the split. Editing any file under benchmark/tasks/heldout/ changes the tree hash and fails the check. Do not update this file to make the check pass."
+}

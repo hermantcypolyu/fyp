@@ -9,7 +9,7 @@ UV ?= uv
 PY := $(UV) run python
 
 .DEFAULT_GOAL := help
-.PHONY: help install new-task gold-patches validate verify-gold catalogue smoke smoke-gym test lint fmt check clean freshclone
+.PHONY: help install new-task gold-patches validate verify-gold catalogue smoke smoke-gym test lint fmt check clean freshclone seal-check
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -46,7 +46,10 @@ fmt: ## Auto-fix lint and format
 	$(UV) run ruff check --fix .
 	$(UV) run ruff format .
 
-check: validate verify-gold test lint ## Everything CI runs
+seal-check: ## Fail if the sealed held-out split has changed (docs/heldout_seal.md)
+	$(PY) scripts/check_heldout_seal.py
+
+check: seal-check validate verify-gold test lint ## Everything CI runs
 
 smoke-gym: ## Same smoke test, but over real NeMo Gym HTTP servers (needs `uv sync --extra gym`, Linux/macOS)
 	$(PY) scripts/smoke_one_task.py --limit 1 --transport gym
