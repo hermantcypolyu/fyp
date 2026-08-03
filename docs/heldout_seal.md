@@ -7,6 +7,7 @@
 | Sealed content | `benchmark/tasks/heldout/` — 10 tasks |
 | Held-out tree SHA | `318fedc8868bcdd46f24dd78793a5c136be54400` |
 | Last commit to modify the split | `ad46f8746a1db72cc925dd656fdb1b7a5ed85d47` |
+| Sealing commit | `151b67d` |
 | Machine-readable record | `benchmark/heldout_seal.json` |
 | Enforcement | `scripts/check_heldout_seal.py`, run by `make check` |
 

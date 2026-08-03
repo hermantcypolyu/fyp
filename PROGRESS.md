@@ -754,7 +754,7 @@ findings**; direct smoke **reward 1.0**.
 | Sealed | 2026-08-03 |
 | Held-out tree SHA | `318fedc8868bcdd46f24dd78793a5c136be54400` |
 | Last commit to modify the split | `ad46f8746a1db72cc925dd656fdb1b7a5ed85d47` |
-| Sealing commit | recorded in the follow-up commit — see "Why the anchor is a tree hash" below |
+| Sealing commit | `151b67d` — added the seal, the check, and the carry-forward |
 | Record | `benchmark/heldout_seal.json`, `docs/heldout_seal.md` |
 | Enforcement | `scripts/check_heldout_seal.py`, wired into `make check` |
 
