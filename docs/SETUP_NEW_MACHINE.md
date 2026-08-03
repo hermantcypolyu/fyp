@@ -138,6 +138,62 @@ uv run python scripts/smoke_one_task.py --limit 1 --trace results/raw/setup_chec
 Rows are validated against [`analysis/trace_schema.json`](../analysis/trace_schema.json) as they
 are written, so an invalid trace fails immediately instead of during analysis.
 
+## 5a. Linux / GPU prerequisites and vendoring gotchas (read this closely)
+
+On a box with a GPU the following items are prerequisites or common traps; they are
+operational rules, not opinions, because they change what code actually runs.
+
+- WSL2 with working GPU passthrough is a hard prerequisite. `nvidia-smi` must
+   succeed inside the Ubuntu session where you run `uv` and `make` — seeing it in
+   PowerShell is not enough. If `nvidia-smi` fails in the WSL shell, CUDA and the
+   rest of the stack will appear absent at runtime.
+
+- Do *not* use the system Python. This box had Python 3.14 installed system-wide and
+   PyTorch publishes no CUDA wheels for cp314: `pip install torch` therefore silently
+   yields a CPU-only build and `torch.cuda.is_available()` returns `False` with no
+   error. Let `uv` manage interpreters and venvs; NeMo RL pins `3.13.13` in its
+   `.python-version` and must run in the interpreter it expects.
+
+- Keep the repository under your home directory, not under `/mnt/c` or any Windows
+   mount. The verifier copies a repo and runs `pytest` for every graded rollout; the
+   Windows filesystem through WSL makes those copies and tests unacceptably slow.
+
+- Files that arrive via Windows carry CRLF. Strip CRLF before committing. The
+   pristine-source verifier compares against untouched source and CRLF makes every
+   file look modified; run `dos2unix` or `git restore --source=HEAD --worktree --` on
+   affected files before committing.
+
+- Vendored clones must live at `../_vendor/<dir>` exactly. `analysis/versions.py`
+   resolves those paths; if it cannot find the clone `_head()` returns `None` and the
+   `matches` boolean can become `False` silently. Do not move or rename the clones.
+
+- A fresh `git clone` lands on `main`, not on the pinned SHA. After checking out a
+   pinned commit you must, for NeMo RL only, run `git submodule update --init --recursive`
+   because the `3rdparty/` pins move with the branch.
+
+- Install `nemo-gym` from the vendored clone, not from PyPI. The published `0.4.0`
+   wheel lacks `ReverifyMode`; the vendored clone is `0.5.0rc0` (unreleased) and
+   contains the code this repo imports. Use `make gym-vendor` which performs
+
+```bash
+uv sync --extra gym
+uv pip install --no-deps -e ../_vendor/nemo-gym
+```
+
+   Note: `uv sync --extra gym` reinstalls the PyPI wheel over an editable install.
+   Always run `make gym-vendor` after any `uv sync` so the editable vendored clone
+   is restored.
+
+- Two artefact classes are intentionally local-only and must be restored by hand from
+   the USB backup: everything matching `results/**/*.jsonl` and the file
+   `.git/info/exclude`. On a fresh machine place them at the exact paths under the
+   restored checkout (`results/` in the repo root, and `.git/info/exclude` inside the
+   repo's `.git` directory). These are excluded from the bundle on purpose.
+
+- Both pinned SHAs live in `docs/pinned_versions.md`; do not duplicate them here —
+   point readers at that file for the authoritative source of truth.
+
+
 ---
 
 ## 6. ⚠️ REQUIRED on Linux: re-check the resource limits

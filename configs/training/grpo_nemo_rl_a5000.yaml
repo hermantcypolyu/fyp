@@ -1,0 +1,39 @@
+# NeMo RL GRPO on a single A5000 (24 GB).
+# Trainer selection resolved 2026-08-03: NeMo RL, superseding grpo_unsloth_a5000.yaml.
+# UNGROUNDED placeholders below are marked; ground them against ../_vendor/nemo-rl
+# before any real run (spec §1.3: with the source open, not from remembered APIs).
+
+grpo:
+  # ---- hazard 2 safety block. Audited vs NeMo RL 55296257. Do not relax. ----
+  reward_scaling:
+    enabled: false        # source_min 0.0 would clamp every -1.0 gate onto 0.0 (ADR 0006)
+    source_min: 0.0
+    source_max: 1.0
+    target_min: 0.0
+    target_max: 1.0
+  normalize_rewards: true          # (r - baseline) / (std + 1e-6): sign-agnostic, safe
+  use_leave_one_out_baseline: true
+  advantage_clip_low: null
+  advantage_clip_high: null
+  invalid_tool_call_advantage: null
+  malformed_thinking_advantage: null
+
+  # ---- scale. UNGROUNDED: key names to be confirmed against upstream configs ----
+  num_prompts_per_step: 4
+  num_generations_per_prompt: 4    # was 8 on the Unsloth plan; halved for VRAM
+  max_num_steps: 10                # smoke first. Success = it completes, not that it learns.
+
+  async_grpo:
+    enabled: false                 # non-colocated needs a separate node pool; single GPU cannot
+
+policy:
+  model_name: Qwen/Qwen2.5-Coder-1.5B-Instruct
+  generation:
+    colocated:
+      enabled: true                # vLLM shares the one card with the training policy
+    vllm_cfg:
+      gpu_memory_utilization: 0.4  # lever 7, and likely the first to bind
+
+cluster:
+  gpus_per_node: 1
+  num_nodes: 1

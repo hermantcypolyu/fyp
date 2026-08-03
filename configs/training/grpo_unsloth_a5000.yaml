@@ -84,6 +84,8 @@ lora:
   use_gradient_checkpointing: unsloth   # GROUNDED [S3] "Reduces memory usage"
   random_state: 42               # GROUNDED [S3]
 
+status: superseded
+superseded_by: configs/training/grpo_nemo_rl_a5000.yaml
 # --------------------------------------------------------------------------- GRPO
 # Every key below appears in the GRPOConfig(...) call in [S3] unless marked otherwise.
 grpo:
