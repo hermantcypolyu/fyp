@@ -1,0 +1,94 @@
+# Baseline evaluation — the pre-RL control arm
+#
+# ############################################################################
+# ##  STATUS: NEVER EXECUTED.                                               ##
+# ##  No evaluation sweep has been run. This describes the control arm the  ##
+# ##  RL result will be compared against.                                   ##
+# ############################################################################
+#
+# This arm is the *untrained* model driven through the same environment, the same
+# tools, the same turn budget and the same verifier as the RL arm. It is the number
+# that makes "RL improved things" a claim rather than an impression.
+#
+# AGENT_BUILD_SPEC §5.6: evaluation and the RL reward must come from ONE verifier.
+# Nothing here re-implements scoring; it calls `envs.coding_env.verifier.verify`, the
+# same function the trainer's reward path calls.
+
+meta:
+  name: baseline
+  status: NEVER_EXECUTED
+  role: control arm (pre-RL), compared against the post-RL checkpoint
+  written: 2026-08-03
+
+model:
+  name: Qwen/Qwen2.5-Coder-1.5B-Instruct   # the same base the RL arm starts from
+  adapter: null                            # no LoRA — this is the untrained control
+  load_in_4bit: true                       # match the training arm, so the comparison
+                                           # is RL-vs-no-RL and not 4bit-vs-16bit
+  max_seq_length: 8192                     # must match configs/training/grpo_unsloth_a5000.yaml
+
+sampling:
+  temperature: 1.0        # matches GRPOConfig.temperature in the training config, so the
+                          # control is sampled the way the policy is during rollouts
+  top_p: 1.0
+  # k samples per task. pass@1 is the headline; k>1 gives pass@k and a variance estimate.
+  # 8 mirrors num_generations so both arms see the same sampling budget per task.
+  n_samples_per_task: 8
+  seed: 42
+
+episode:
+  # Both taken from each task.yaml (constraints.max_turns / max_tool_calls) rather than
+  # set here, so a task's own budget is authoritative and the two arms cannot diverge.
+  max_turns: from_task_yaml
+  max_tool_calls: from_task_yaml
+  transport: gym          # NOTE: never executed on the build machine — uvloop is
+                          # Linux/macOS only. See docs/A5000_CARRY_FORWARD.md item 2.
+                          # Use `direct` if the gym stack is unavailable; both must
+                          # produce the same reward (§5.6).
+
+splits:
+  # ⚠ HELD-OUT IS SEALED — docs/heldout_seal.md.
+  #
+  # `train` is run now, freely, as often as needed.
+  # `heldout` is run EXACTLY ONCE, at the end of the project, after the final
+  # checkpoint has been chosen using train only. It is not run to sanity-check the
+  # harness, not run to see if the numbers look reasonable, and not run twice.
+  train:
+    enabled: true
+    n_tasks: 26
+  heldout:
+    enabled: false        # flip to true once, at the very end, and never again
+    n_tasks: 10
+    guard: "make check runs scripts/check_heldout_seal.py; a broken seal fails the build"
+
+metrics:
+  # reward_v1 is normalised (ADR 0006): 0.0 = achieved nothing, 1.0 = solved,
+  # negative = broke tests that passed before the episode started.
+  primary: reward            # normalised, in [-1, 1]
+  also_record:
+    - pass_fraction          # the raw p/n, kept so pre-ADR-0006 tables stay comparable
+    - tests_passed
+    - tests_total
+    - floor_tests            # without it the reward cannot be reconstructed
+    - gates                  # per-gate rates — `tests_modified` is the #1 reward hack
+    - submitted
+    - tool_calls
+    - duration_s
+  # A baseline that scores well by hacking is not a baseline. Report the gate rate
+  # beside the reward, always: a mean reward of 0.3 with a 40% tests_modified rate is
+  # a different result from 0.3 with a 0% rate.
+  report_gate_rates_alongside_reward: true
+
+output:
+  trace: results/raw/b6_baseline/rollouts.jsonl   # analysis/trace_schema.json, schema_version 2
+  report: results/raw/b6_baseline/report.json
+
+expectations:
+  # PROJECTED, not measured. Recorded so a wildly different result is noticed rather
+  # than rationalised after the fact.
+  # A 1.5B instruct model with no RL, on multi-turn agentic repair, is expected to be
+  # poor: many episodes ending without `submit` (the no_submit gate) and many edits
+  # that change nothing. Under ADR 0006 "changed nothing" is exactly 0.0, so a baseline
+  # mean near 0.0 is the honest expectation, not a bug.
+  baseline_mean_reward: "PROJECTED ~0.0 to 0.2 — verify, do not assume"
+  most_likely_gate: no_submit

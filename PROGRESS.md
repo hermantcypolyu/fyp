@@ -811,3 +811,64 @@ afterwards is a training-set claim wearing a held-out label.
 1 skipped**; ruff **0 findings**; validator **36 tasks, 0 errors**.
 
 **No training run. No weights downloaded. No checkpoint exists.**
+
+---
+
+## 2026-08-03 · Final build step · A5000 handoff — **NEVER EXECUTED**
+
+Four files, all grounded in sources read on the day rather than written from memory:
+
+| File | What |
+| --- | --- |
+| `configs/training/grpo_unsloth_a5000.yaml` | 4-bit + LoRA r32, `num_generations` 8, `max_seq_length` 8192 |
+| `configs/eval/baseline.yaml` | the pre-RL control arm |
+| `docs/RUN_ON_A5000.md` | ordered runbook, MEASURED vs PROJECTED kept apart throughout |
+| `docs/TRAINING_READINESS.md` | the §7 handoff doc — **it did not previously exist** |
+
+**Sources read** (2026-08-03): NeMo Gym's Unsloth tutorial and RL-framework-compatibility pages
+from the `NVIDIA-NeMo/Gym` repo, and the real
+[`NeMo-Gym-Multi-Environment.ipynb`](https://github.com/unslothai/notebooks/blob/main/nb/NeMo-Gym-Multi-Environment.ipynb)
+notebook, plus Unsloth's Nemotron-3 RL page. Every hyperparameter in the training config is
+tagged **GROUNDED** (with the source), **CHOSEN**, or **ASSUMPTION**.
+
+**The biggest finding, and the largest risk in the plan.** Unsloth's own documentation describes
+the collaboration as enabling **single-turn** rollout RL, and the notebook's reward function is
+`reward_fn(completions, prompts=None, **kwargs)` — one completion, one `/verify` POST. **Our
+episode is multi-turn**: `seed_session`, up to `max_turns` tool calls, then `submit`. So the
+integration is **not a drop-in**; a rollout adapter is required, and that is the first thing to
+prototype on the box — before any hyperparameter thinking.
+
+**Second finding.** The upstream reward function returns `0.0` when the `/verify` call fails or
+is non-200. Under ADR 0006 `0.0` is a *real* score — "achieved nothing" — so a transport failure
+would enter the dataset indistinguishable from a genuine do-nothing rollout. The config records
+that it must raise or record a sentinel instead.
+
+**Pins carried through:** `unsloth==2026.1.4`, `unsloth_zoo==2026.1.4` — NeMo Gym's compatibility
+page states the integration is tested on exactly these and that other versions are not guaranteed.
+
+**Divergences from the upstream notebook, all flagged in the config:** `max_seq_length` 8192 (it
+uses 4096, measured on an H100), `gradient_accumulation_steps` 16 (it uses 64 — this changes
+effective batch size), 4-bit + LoRA rather than full fine-tuning, and the `-Coder-` model variant.
+
+**Target hardware changed.** `AGENT_BUILD_SPEC.md` §2, `docs/vram_notes.md` and ADR 0001 all still
+say **RTX 4070 Ti, 12 GB**; the box is an **A5000, 24 GB**. The extra headroom is the only reason
+8192 × 8 is plausible. `vram_notes.md` §2–§3 must be re-derived on the real card. Recorded, not
+silently rewritten.
+
+**`docs/TRAINING_READINESS.md` was missing.** It is referenced from nine places and
+`AGENT_BUILD_SPEC.md` §7 calls it "the most important file in the repo", but it had never been
+created — every one of those links was dangling. Now written to the §7 structure (inventory, what
+was never run, exact next commands, hardware table, blockers, known unknowns, VRAM levers, risk
+register) and pointing at `RUN_ON_A5000.md` as the runbook.
+
+**Carry-forward item 4 is treated as blocking** and is Phase 1 of the runbook, ahead of the other
+three: if the trainer clamps or applies `max(0, r)`, the `-1.0` gates collapse onto `0.0` and the
+reward-hack deterrent disappears with no error. The fix is in the trainer — **never** by raising
+`GATE_REWARD`.
+
+**Commands run:** YAML parse check · `check_heldout_seal.py` · `uv run pytest` · `ruff check .`
+
+**Numbers (measured):** both configs parse; seal **intact**; unit tests **191 passed, 1 skipped**;
+ruff **0 findings**.
+
+**No training run. No weights downloaded. No GPU touched.**

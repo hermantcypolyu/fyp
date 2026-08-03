@@ -1,0 +1,175 @@
+# GRPO on a single RTX A5000 (24 GB, Ampere) — Unsloth + NeMo Gym
+#
+# ############################################################################
+# ##  STATUS: NEVER EXECUTED.                                               ##
+# ##  No line of this file has run. No training has been performed, no      ##
+# ##  weights downloaded, no GPU touched. Every number is either GROUNDED   ##
+# ##  in a cited upstream source or marked ASSUMPTION / CHOSEN.             ##
+# ##  Treat it as a starting point to be measured, not a working config.    ##
+# ############################################################################
+#
+# Grounded in (read 2026-08-03, not from memory):
+#   [S1] NeMo Gym Unsloth tutorial
+#        fern/versions/latest/pages/training-tutorials/unsloth.mdx
+#        https://docs.nvidia.com/nemo/gym/tutorials/training-tutorials/unsloth
+#   [S2] NeMo Gym RL framework compatibility
+#        fern/versions/latest/pages/reference/rl-framework-compatibility.mdx
+#   [S3] Unsloth x NeMo Gym multi-environment GRPO notebook
+#        https://github.com/unslothai/notebooks/blob/main/nb/NeMo-Gym-Multi-Environment.ipynb
+#   [S4] Unsloth Nemotron-3 docs, "Reinforcement Learning + NeMo Gym"
+#        https://unsloth.ai/docs/models/nemotron-3
+#
+# ############################################################################
+# ##  BLOCKING PREREQUISITE — docs/A5000_CARRY_FORWARD.md item 4            ##
+# ##                                                                        ##
+# ##  reward_v1 is in [-1, 1] (ADR 0006). Every hard gate returns EXACTLY   ##
+# ##  -1.0, and that is the only deterrent against the #1 reward hack.      ##
+# ##  If anything in the trainer clamps, relu's, or max(0, r)'s the reward, ##
+# ##  gates collapse onto 0.0 == "did nothing" and the deterrent vanishes   ##
+# ##  SILENTLY — no error, no failing test.                                 ##
+# ##                                                                        ##
+# ##  Verify this BEFORE the first real run. If the trainer does clamp,     ##
+# ##  fix the trainer. NEVER raise GATE_REWARD to work around it.          ##
+# ############################################################################
+
+meta:
+  name: grpo_unsloth_a5000
+  status: NEVER_EXECUTED
+  target_hardware: RTX A5000, 24 GB GDDR6, Ampere (compute capability 8.6), single GPU, Linux
+  # NOTE: AGENT_BUILD_SPEC §2 and docs/vram_notes.md still say "RTX 4070 Ti, 12 GB".
+  # The target changed to the A5000. vram_notes.md §2/§3 must be re-derived on the box.
+  written: 2026-08-03
+
+# --------------------------------------------------------------------------- versions
+# [S2] states the NeMo Gym <-> Unsloth integration is *tested on* these exact
+# versions and that "other versions are not guaranteed to work". Pin them.
+versions:
+  unsloth: "2026.1.4"            # GROUNDED [S2]
+  unsloth_zoo: "2026.1.4"        # GROUNDED [S2]
+  extra_packages: [omegaconf]    # GROUNDED [S3] `pip install unsloth unsloth_zoo omegaconf`
+  python: "3.12"                 # GROUNDED [S3] NeMo Gym needs 3.12+; repo pins 3.12
+  nemo_gym: ec5a8136046aa0dd0c1525313654502f2fb7c42e   # docs/pinned_versions.md
+
+# --------------------------------------------------------------------------- model
+model:
+  # CHOSEN: the project's model (docs/vram_notes.md §3). [S3] used the non-coder
+  # "unsloth/Qwen2.5-1.5B-Instruct"; the coder variant is the same architecture and
+  # parameter count, so the arithmetic carries, but this substitution is UNVERIFIED.
+  name: Qwen/Qwen2.5-Coder-1.5B-Instruct
+
+  max_seq_length: 8192           # REQUESTED. [S3] uses 4096 and comments
+                                 # "Can increase for longer outputs, or decrease if
+                                 # running into OOM". 8192 is a doubling of a value
+                                 # measured on an H100 (80 GB), on a 24 GB card.
+                                 # -> ASSUMPTION, first OOM lever (see vram_levers).
+  load_in_4bit: true             # REQUESTED. [S3] sets load_in_4bit=False and
+                                 # full_finetuning=True on an H100. 4-bit + LoRA is
+                                 # the documented low-VRAM path ([S3] markdown).
+  full_finetuning: false         # must be false for LoRA — [S3] says so explicitly
+  offload_embedding: true        # GROUNDED [S3] "Reduces VRAM a little"
+
+# --------------------------------------------------------------------------- LoRA
+# Shape and target_modules copied from the (commented-out) LoRA cell in [S3].
+lora:
+  r: 32                          # REQUESTED. [S3] suggests "8, 16, 32, 64, 128"
+  lora_alpha: 64                 # GROUNDED [S3] `lora_alpha = lora_rank*2` ("*2 speeds up training")
+  target_modules:                # GROUNDED [S3], verbatim
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  use_gradient_checkpointing: unsloth   # GROUNDED [S3] "Reduces memory usage"
+  random_state: 42               # GROUNDED [S3]
+
+# --------------------------------------------------------------------------- GRPO
+# Every key below appears in the GRPOConfig(...) call in [S3] unless marked otherwise.
+grpo:
+  temperature: 1.0               # GROUNDED [S3]
+  learning_rate: 1.0e-5          # GROUNDED [S3]
+  weight_decay: 0.001            # GROUNDED [S3]
+  warmup_ratio: 0.0              # GROUNDED [S3]
+  lr_scheduler_type: linear      # GROUNDED [S3]
+  optim: adamw_8bit              # GROUNDED [S3]
+  logging_steps: 1               # GROUNDED [S3]
+  per_device_train_batch_size: 1 # GROUNDED [S3]
+  gradient_accumulation_steps: 16
+                                 # DIVERGES from [S3], which uses 64 on an H100.
+                                 # 16 is CHOSEN to keep a step short enough to debug;
+                                 # it changes the effective batch size and therefore
+                                 # the learning dynamics. Raise toward 64 if updates
+                                 # are too noisy — this is a VRAM-neutral lever.
+  num_generations: 8             # REQUESTED; also GROUNDED [S3] (same value)
+  num_train_epochs: 1            # GROUNDED [S3]
+  max_steps: 100                 # GROUNDED [S3]. Our full run will differ; 100 is a
+                                 # sane first target and matches the tutorial's scale.
+  save_steps: 100                # GROUNDED [S3]
+  epsilon_high: 0.28             # GROUNDED [S3]
+  mask_truncated_completions: true  # GROUNDED [S3]
+  report_to: none                # GROUNDED [S3]
+  output_dir: results/raw/b6_grpo_a5000
+
+  # [S3] computes these at runtime from the tokenised dataset:
+  #   max_prompt_length     = max_length_seen + 1
+  #   max_completion_length = max_seq_length - max_prompt_length
+  # Our prompt carries the tool schemas plus a repo listing, so `max_length_seen` is
+  # much larger than the tutorial's single-question prompts. Compute it, do not guess.
+  max_prompt_length: null        # compute at runtime, per [S3]
+  max_completion_length: null    # compute at runtime, per [S3]
+
+# --------------------------------------------------------------------------- environment
+environment:
+  # Our resources server, not one of the tutorial's.
+  head_server_port: 11000        # GROUNDED [S3] "NeMo Gym starts a head server on port 11000
+                                 # by default, and the resources server port is selected at
+                                 # random from available ports, unless specified otherwise."
+  # Resolve the /verify endpoint from the head server rather than hard-coding a port:
+  #   GET http://127.0.0.1:11000/global_config_dict_yaml   -> per-server host/port
+  # GROUNDED [S3] `get_verify_endpoint()`.
+  discover_ports_from_head: true
+  split: train                   # held-out is SEALED (docs/heldout_seal.md) — never train on it
+  validation_from: train         # checkpoint selection uses a slice of train ONLY
+
+# --------------------------------------------------------------------------- ⚠ the big one
+integration_risk:
+  # THE LARGEST ASSUMPTION IN THIS FILE.
+  #
+  # [S4] describes the Unsloth x NeMo Gym collaboration as enabling
+  # "single-turn rollout RL training", and [S3]'s reward function is
+  #
+  #     def reward_fn(completions, prompts=None, **kwargs) -> np.array
+  #
+  # which scores ONE completion with ONE POST to /verify.
+  #
+  # Our environment is not single-turn. An episode is: seed_session -> up to
+  # `max_turns` tool calls (list_files/read_file/write_file/edit_file/run_tests/submit)
+  # -> /verify on the resulting sandbox. There is no single "completion" string to score.
+  #
+  # So this is NOT a drop-in. Expect to write a rollout adapter that drives the
+  # multi-turn episode and returns one scalar per rollout to GRPOTrainer, or to use
+  # a NeMo Gym agent harness that already does. Budget real time for this; it is the
+  # first thing to prototype on the A5000, before any hyperparameter thinking.
+  multi_turn_adapter_required: true
+  reward_fn_default_on_failure: 0.0
+  # [S3]'s reward_fn returns 0.0 when the HTTP call fails or is non-200:
+  #     reward = resp.json().get("reward", 0.0) if resp.status_code == 200 else 0.0
+  # Under ADR 0006, 0.0 is a meaningful score — "achieved nothing" — so a network
+  # failure is indistinguishable from a do-nothing rollout and silently enters the
+  # dataset. Make transport failure raise or record a sentinel; do not let it score.
+
+# --------------------------------------------------------------------------- VRAM
+vram_levers:
+  # ALL PROJECTED — nothing measured. Apply top-down on OOM.
+  # docs/vram_notes.md §3.2: KV cache ~= 28 KiB/token for this architecture
+  # (itself marked UNVERIFIED there), so 8192 x 8 generations ~= 1.75 GiB of KV
+  # cache alone, before weights, activations or the optimiser.
+  order:
+    - "1. already applied: load_in_4bit + LoRA (full fine-tune is arithmetically impossible)"
+    - "2. num_generations 8 -> 4   (halves rollout KV cache; also halves group size, so
+          GRPO's advantage gets noisier — this is a statistical cost, not just a speed one)"
+    - "3. max_seq_length 8192 -> 4096  (back to [S3]'s value; truncates long episodes)"
+    - "4. gradient_accumulation_steps up (VRAM-neutral for activations, keeps effective batch)"
+    - "5. tool-output truncation in the harness (shrinks prompt growth per turn)"
+    - "6. lora r 32 -> 16          (smallest effect of the six; LoRA params are ~1% of the model)"
