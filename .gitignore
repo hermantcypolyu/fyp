@@ -72,3 +72,4 @@ desktop.ini
 _vendor/
 third_party/
 nemo-gym/
+results/**/*.bak
