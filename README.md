@@ -69,3 +69,42 @@ Run `make help` for every target.
 - The held-out split is **sealed**; do not open it.
 - Hidden tests are never mounted into the agent's sandbox.
 - No number appears in any document unless a command produced it and the output is under `results/`.
+
+## Reproducibility & Handoff
+
+This project is organized to be reproducible and portable so you (or another developer) can continue development on another machine.
+
+- **Python version:** 3.12+ is required. Use the same Python version on other machines for best compatibility.
+- **Project setup (minimal steps):**
+
+```bash
+# clone the repo
+git clone <this-repo-root> && cd rl-coding-agents
+
+# create an isolated environment (recommended):
+# Option A: using `uv` (preferred if you use `uv` workflows)
+uv venv --python 3.12
+source .venv/bin/activate
+uv sync --extra dev
+
+# Option B: manually with Python
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt  # if present; otherwise use pyproject tooling
+```
+
+- **Environment variables and API keys:** copy `env.example.yaml` to `env.yaml` and fill in provider keys (do NOT commit `env.yaml`).
+- **Quick validation:**
+
+```bash
+make validate
+make test
+make smoke    # runs a lightweight end-to-end smoke test
+```
+
+- **Reproducible development notes:**
+	- Keep the Python runtime at 3.12+. Use the same `uv` and `uv.lock` versions when sharing environments.
+	- Do not commit secrets, large model weights, or datasets. Use `env.example.yaml` as a template and a private `env.yaml` for machine-specific secrets.
+	- Use branches for feature work and open PRs for mainline changes.
+
+If you want, follow the `HANDOFF.md` file for a concise checklist to move development to another computer.

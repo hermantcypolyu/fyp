@@ -1,3 +1,42 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Packaging
+*.egg-info/
+dist/
+build/
+
+# Env and secrets
+.python-version
+.env
+.env.*
+env.yaml
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Results and caches
+results/
+results/raw/
+cache/
+tmp/
+*.bundle
+_usb_staging/
+mnt/
+_vendor/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
 # --- Python ---
 __pycache__/
 *.py[cod]
