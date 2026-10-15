@@ -1,0 +1,3 @@
+-e ../..
+-e ../../../_vendor/nemo-gym
+pytest==9.1.1

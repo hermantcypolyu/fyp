@@ -41,6 +41,13 @@ class CodingAgentConfig(SimpleAgentConfig):
     #: a silently short episode looks exactly like a model that gave up.
     max_steps: int = 40
 
+    #: Scaffold a complete coding episode for RL infrastructure testing.
+    first_tool_name: str | None = "list_files"
+    second_tool_name: str | None = "read_file"
+    third_tool_name: str | None = "edit_file"
+    fourth_tool_name: str | None = "run_tests"
+    fifth_tool_name: str | None = "submit"
+
 
 class CodingAgent(SimpleAgent):
     config: CodingAgentConfig
@@ -53,7 +60,17 @@ class CodingAgent(SimpleAgent):
     ) -> NeMoGymResponse:
         cap = _max_turns(body) or self.config.max_steps
         scoped = self.model_copy(update={"config": self.config.model_copy(update={"max_steps": cap})})
-        return await SimpleAgent.responses(scoped, request, response, body)
+
+        # metadata is environment-side information used to select the per-task
+        # turn budget. Re-validate from a dump that excludes metadata so the
+        # field is genuinely unset. ServerClient serialises with
+        # exclude_unset=True; setting metadata=None would still forward
+        # "metadata": null to the pinned vLLM endpoint, which rejects it.
+        model_body = NeMoGymResponseCreateParamsNonStreaming.model_validate(
+            body.model_dump(exclude={"metadata", "service_tier", "store"})
+        )
+
+        return await SimpleAgent.responses(scoped, request, response, model_body)
 
 
 def _max_turns(body: NeMoGymResponseCreateParamsNonStreaming) -> int | None:

@@ -56,12 +56,20 @@ def episode_metadata(task: Task) -> dict[str, str]:
     number. Values are strings because the Responses API's `metadata` is a string map.
     """
     constraints = task.data.get("constraints", {}) or {}
-    return {
+    repo = task.data.get("repo", {}) or {}
+    entrypoint_hint = repo.get("entrypoint_hint")
+
+    metadata = {
         "task_id": task.id,
         "split": task.split,
         "max_turns": str(constraints.get("max_turns", 20)),
         "max_tool_calls": str(constraints.get("max_tool_calls", 40)),
     }
+
+    if entrypoint_hint:
+        metadata["entrypoint_hint"] = f"repo/{entrypoint_hint}"
+
+    return metadata
 
 
 @dataclass
