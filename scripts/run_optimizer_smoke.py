@@ -68,6 +68,15 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=16,
     )
+    parser.add_argument(
+        "--adapter-checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Existing LoRA checkpoint to continue training from. "
+            "If omitted, a new LoRA adapter is created."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -346,7 +355,27 @@ def main() -> None:
         ],
     )
 
-    model = get_peft_model(base_model, lora_config)
+    if args.adapter_checkpoint is not None:
+        if not args.adapter_checkpoint.is_dir():
+            raise FileNotFoundError(
+                "Adapter checkpoint directory does not exist: "
+                f"{args.adapter_checkpoint}"
+            )
+
+        print(
+            "Loading trainable LoRA checkpoint:",
+            args.adapter_checkpoint,
+        )
+
+        model = PeftModel.from_pretrained(
+            base_model,
+            args.adapter_checkpoint,
+            is_trainable=True,
+        )
+    else:
+        print("Creating a new LoRA adapter")
+        model = get_peft_model(base_model, lora_config)
+
     model.train()
 
     trainable_parameters = [
