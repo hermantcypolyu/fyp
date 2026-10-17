@@ -1,4 +1,4 @@
-"""Resources server: the six tools over HTTP, plus `POST /verify`.
+"""Resources server: the seven tools over HTTP, plus `POST /verify`.
 
 This is the only module in the project that imports `nemo_gym`, and it is deliberately
 thin - a routing table over `envs.coding_env.session`, which holds all the behaviour and is
@@ -9,7 +9,7 @@ docs/nemo_gym_notes.md 7). Keeping logic out of here is what keeps the environme
 in the default developer environment.
 
 It has been driven end-to-end with the shim: `scripts/smoke_one_task.py --transport gym`
-does `/seed_session` -> six tool routes -> `/verify` against this app through Starlette's
+does `/seed_session` -> seven tool routes -> `/verify` against this app through Starlette's
 TestClient, and scores the gold solution 1.0.
 
 ⭐ 5.6's critical invariant lives here: `/verify` calls `EpisodeSession.grade()`, which calls
@@ -37,7 +37,12 @@ from nemo_gym.base_resources_server import (
     SimpleResourcesServer,
 )
 from nemo_gym.server_utils import SESSION_ID_KEY
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    model_validator,
+)
 
 from envs.coding_env.session import SessionStore
 
@@ -74,6 +79,27 @@ class EditFileRequest(BaseModel):
     path: str
     old_str: str
     new_str: str
+
+
+class ReplaceLinesRequest(BaseModel):
+    path: str
+    start_line: int
+    end_line: int
+    new_str: str | None = None
+    new_lines: list[str] | None = None
+
+    @model_validator(mode="after")
+    def validate_replacement(self) -> ReplaceLinesRequest:
+        if self.new_str is not None and self.new_lines is not None:
+            raise ValueError(
+                "provide either new_str or new_lines, "
+                "not both"
+            )
+
+        if self.new_str is None and self.new_lines is None:
+            raise ValueError("new_lines is required")
+
+        return self
 
 
 class NoArgsRequest(BaseModel):
@@ -129,6 +155,7 @@ class CodingResourcesServer(SimpleResourcesServer):
         app.post("/read_file")(self.read_file)
         app.post("/write_file")(self.write_file)
         app.post("/edit_file")(self.edit_file)
+        app.post("/replace_lines")(self.replace_lines)
         app.post("/run_tests")(self.run_tests)
         app.post("/submit")(self.submit)
         return app
@@ -167,7 +194,7 @@ class CodingResourcesServer(SimpleResourcesServer):
             limits_enforced=result.limits_enforced,
         )
 
-    # ------------------------------------------------------------------ the six tools
+    # ----------------------------------------------------------------- the seven tools
 
     def _tool(self, request: Request, name: str, arguments: dict[str, Any]) -> ToolResponse:
         session = self.store.get(request.session[SESSION_ID_KEY])
@@ -186,6 +213,17 @@ class CodingResourcesServer(SimpleResourcesServer):
 
     async def edit_file(self, request: Request, body: EditFileRequest) -> ToolResponse:
         return self._tool(request, "edit_file", body.model_dump())
+
+    async def replace_lines(
+        self,
+        request: Request,
+        body: ReplaceLinesRequest,
+    ) -> ToolResponse:
+        return self._tool(
+            request,
+            "replace_lines",
+            body.model_dump(),
+        )
 
     async def run_tests(self, request: Request, body: NoArgsRequest) -> ToolResponse:
         return self._tool(request, "run_tests", {})

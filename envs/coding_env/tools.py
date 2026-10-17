@@ -1,8 +1,8 @@
-"""The six agent tools (spec 5.5).
+"""The seven agent tools (spec 5.5 plus line-based editing).
 
 Fewer tools means a smaller action space, which is what a 1.5B policy needs. There are
-exactly six and there will not be a seventh: `list_files`, `read_file`, `write_file`,
-`edit_file`, `run_tests`, `submit`.
+seven tools: `list_files`, `read_file`, `write_file`, `edit_file`, `replace_lines`,
+`run_tests`, and `submit`.
 
 Three rules govern everything below.
 
@@ -28,6 +28,7 @@ Grounded in NeMo Gym built-ins; see the per-function citations.
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ __all__ = [
     "GATE_SANDBOX_ESCAPE",
     "GATE_TESTS_MODIFIED",
     "MAX_READ_LINES",
+    "MAX_REPLACE_LINES",
     "TOOL_DEFINITIONS",
     "ToolCall",
     "ToolResult",
@@ -59,6 +61,8 @@ BUDGET_SHORT = 120  # write_file / edit_file / submit / any error
 
 #: A single `read_file` never returns more than this many lines, whatever `end` says.
 MAX_READ_LINES = 200
+#: replace_lines may replace at most this many existing source lines in one call.
+MAX_REPLACE_LINES = 12
 
 #: `list_files` never returns more than this many entries.
 MAX_LIST_ENTRIES = 200
@@ -130,7 +134,7 @@ def _err(text: str) -> ToolResult:
 
 @dataclass
 class Toolbox:
-    """The six tools, bound to one sandbox directory and one task's constraints.
+    """The seven tools, bound to one sandbox directory and one task's constraints.
 
     `root` is the materialised working copy: it contains `repo/` and `smoke/`, and - in
     the agent's world - deliberately no `tests/` (see `task_loader.materialise`).
@@ -220,7 +224,7 @@ class Toolbox:
             return f"{rel} is not writable. You may only write to: {allowed}."
         return None
 
-    # ------------------------------------------------------------------ the six tools
+    # ----------------------------------------------------------------- the seven tools
 
     def list_files(self, path: str = ".") -> ToolResult:
         """List files under `path`, recursively. Directories end with `/`.
@@ -345,6 +349,198 @@ class Toolbox:
         target.write_text(text.replace(old_str, new_str, 1), encoding="utf-8", newline="\n")
         return _ok(f"Edited {rel}.")
 
+    def replace_lines(
+        self,
+        path: str,
+        start_line: int,
+        end_line: int,
+        new_str: str | None = None,
+        new_lines: list[str] | None = None,
+    ) -> ToolResult:
+        """Replace an inclusive range of 1-based source lines.
+
+        This line-based interface avoids the exact-string matching and escaping
+        burden of edit_file while retaining the same sandbox and write-glob
+        protections.
+
+        At most MAX_REPLACE_LINES existing lines may be replaced in one call.
+        An empty new_lines list or new_str deletes the selected range.
+        """
+        try:
+            rel, target = self._resolve(path)
+        except _PathError as e:
+            return _err(str(e))
+
+        if target.is_dir():
+            return _err(f"no such file: {rel}")
+
+        if refusal := self._check_writable(rel):
+            return _err(refusal)
+
+        if not target.is_file():
+            return _err(f"no such file: {rel}")
+
+        if (
+            isinstance(start_line, bool)
+            or isinstance(end_line, bool)
+            or not isinstance(start_line, int)
+            or not isinstance(end_line, int)
+        ):
+            return _err(
+                "start_line and end_line must be integers."
+            )
+
+        if start_line < 1:
+            return _err(
+                "start_line must be at least 1."
+            )
+
+        if end_line < start_line:
+            return _err(
+                f"end_line={end_line} is before "
+                f"start_line={start_line} in {rel}."
+            )
+
+        if new_str is not None and new_lines is not None:
+            return _err(
+                "provide either new_str or new_lines, "
+                "not both."
+            )
+
+        if new_str is None and new_lines is None:
+            return _err(
+                "provide new_lines with one source "
+                "line per item."
+            )
+
+        if new_lines is not None:
+            if not isinstance(new_lines, list):
+                return _err(
+                    "new_lines must be a list of strings."
+                )
+
+            if not all(
+                isinstance(line, str)
+                for line in new_lines
+            ):
+                return _err(
+                    "new_lines must contain only strings."
+                )
+
+            replacement_lines = list(new_lines)
+        else:
+            if not isinstance(new_str, str):
+                return _err(
+                    f"new_str must be a string, got "
+                    f"{type(new_str).__name__}."
+                )
+
+            # Keep older tool callers and saved trajectories compatible.
+            replacement_lines = (
+                new_str.splitlines()
+                if new_str
+                else []
+            )
+
+        try:
+            original_text = target.read_text(
+                encoding="utf-8"
+            )
+        except UnicodeDecodeError:
+            return _err(
+                f"{rel} is not UTF-8 text."
+            )
+
+        original_lines = original_text.splitlines()
+        total_lines = len(original_lines)
+
+        if end_line > total_lines:
+            return _err(
+                f"{rel} has only {total_lines} lines; "
+                f"end_line={end_line} is past the end."
+            )
+
+        replaced_count = end_line - start_line + 1
+
+        if replaced_count > MAX_REPLACE_LINES:
+            return _err(
+                f"replace_lines may replace at most "
+                f"{MAX_REPLACE_LINES} lines at once."
+            )
+
+        updated_lines = [
+            *original_lines[: start_line - 1],
+            *replacement_lines,
+            *original_lines[end_line:],
+        ]
+
+        updated_text = "\n".join(updated_lines)
+
+        # Source files written by the environment use a final newline. Preserve
+        # that convention, including when the replacement deletes all lines.
+        if updated_lines:
+            updated_text += "\n"
+
+        if updated_text == original_text:
+            return _err(
+                f"replacement makes no changes to {rel}. "
+                "Revise new_lines before retrying."
+            )
+
+        if target.suffix == ".py":
+            try:
+                ast.parse(
+                    updated_text,
+                    filename=rel,
+                )
+            except SyntaxError as exc:
+                line_number = (
+                    exc.lineno
+                    if exc.lineno is not None
+                    else "unknown"
+                )
+
+                return _err(
+                    f"replacement would make {rel} invalid Python: "
+                    f"{exc.msg} at line {line_number}. "
+                    f"No changes were written."
+                )
+
+        target.write_text(
+            updated_text,
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        preview_first = max(start_line - 2, 1)
+        preview_last = min(
+            max(
+                start_line + len(replacement_lines) + 1,
+                preview_first,
+            ),
+            len(updated_lines),
+        )
+
+        if updated_lines:
+            preview = "\n".join(
+                f"{line_number} | "
+                f"{updated_lines[line_number - 1]}"
+                for line_number in range(
+                    preview_first,
+                    preview_last + 1,
+                )
+            )
+        else:
+            preview = "(file is now empty)"
+
+        return _ok(
+            f"Replaced lines {start_line}-{end_line} "
+            f"in {rel}.\n"
+            f"Updated preview:\n"
+            f"{preview}",
+            BUDGET_READ_FILE,
+        )
+
     def run_tests(self) -> ToolResult:
         """Run the **visible smoke tests only** - never the hidden suite.
 
@@ -380,7 +576,17 @@ class Toolbox:
         return _ok("Submitted. The episode is over.")
 
 
-_DISPATCHABLE = frozenset({"list_files", "read_file", "write_file", "edit_file", "run_tests", "submit"})
+_DISPATCHABLE = frozenset(
+    {
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "replace_lines",
+        "run_tests",
+        "submit",
+    }
+)
 
 
 class _PathError(Exception):
@@ -389,7 +595,7 @@ class _PathError(Exception):
 
 # --------------------------------------------------------------------- tool schemas
 
-# The agent-visible JSON schema for the six tools, in OpenAI function-calling shape.
+# The agent-visible JSON schema for the seven tools, in OpenAI function-calling shape.
 # Descriptions are written for a 1.5B reader: short, concrete, and stating the constraint
 # up front rather than in a trailing clause.
 #
@@ -453,6 +659,55 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "new_str": {"type": "string", "description": "Replacement text."},
             },
             "required": ["path", "old_str", "new_str"],
+        },
+    },
+    {
+        "name": "replace_lines",
+        "description": (
+            f"Replace an inclusive range of 1-based source lines. "
+            f"Use line numbers from read_file. Replaces at most "
+            f"{MAX_REPLACE_LINES} existing lines per call."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Sandbox-relative source file to edit."
+                    ),
+                },
+                "start_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": (
+                        "First existing line to replace, 1-based."
+                    ),
+                },
+                "end_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": (
+                        "Last existing line to replace, inclusive."
+                    ),
+                },
+                "new_lines": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                    },
+                    "description": (
+                        "Replacement source code, one source line per array "
+                        "item. Use an empty array to delete the selected lines."
+                    ),
+                },
+            },
+            "required": [
+                "path",
+                "start_line",
+                "end_line",
+                "new_lines",
+            ],
         },
     },
     {

@@ -28,8 +28,9 @@ behind it.
 - Reward floor: train mean **0.46**, held-out mean **0.48** — the splits are well matched.
 - Held-out headroom (`n_tests - floor_tests`) is **6–9 on every task**.
 
-**Environment** — six tools (`list_files`, `read_file`, `write_file`, `edit_file`, `run_tests`,
-`submit`), a sandbox, and one verifier used by both evaluation and RL (§5.6). Two transports:
+**Environment** — seven tools (`list_files`, `read_file`, `write_file`, `edit_file`,
+`replace_lines`, `run_tests`, `submit`), a sandbox, and one verifier used by both evaluation
+and RL (§5.6). Two transports:
 `direct` (in-process) and `gym` (FastAPI over NeMo Gym).
 
 **Reward** — `reward_v1`, normalised per ADR 0006:

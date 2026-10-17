@@ -23,11 +23,23 @@ from shutil import rmtree
 from typing import Any
 
 from benchmark.tools.task_loader import SPLITS, TASKS_ROOT, Task, TaskError, load_task
+from envs.coding_env.docker_sandbox import (
+    DockerSandbox,
+    DockerTask,
+    load_docker_tasks,
+)
 from envs.coding_env.limits import ResourceLimits
 from envs.coding_env.sandbox import Sandbox
+from envs.coding_env.swe_gym_session import SWEGymEpisodeSession
 from envs.coding_env.verifier import VerifyResult, verify_sandbox
 
-__all__ = ["EpisodeSession", "SessionStore", "episode_metadata", "find_task"]
+__all__ = [
+    "EpisodeSession",
+    "SessionStore",
+    "episode_metadata",
+    "find_task",
+    "find_swe_gym_task",
+]
 
 
 @cache
@@ -38,6 +50,18 @@ def find_task(task_id: str, split: str | None = None, root: Path = TASKS_ROOT) -
         if (path / "task.yaml").is_file():
             return load_task(path)
     raise TaskError(f"no task {task_id!r} under {root}" + (f" in split {split!r}" if split else ""))
+
+
+@cache
+def find_swe_gym_task(task_id: str) -> DockerTask:
+    tasks = load_docker_tasks()
+
+    try:
+        return tasks[task_id]
+    except KeyError as exc:
+        raise TaskError(
+            f"no SWE-Gym pilot task {task_id!r}"
+        ) from exc
 
 
 def episode_metadata(task: Task) -> dict[str, str]:
@@ -128,21 +152,73 @@ class SessionStore:
 
     parent: Path | None = None
     limits: ResourceLimits | None = None
-    sessions: dict[str, EpisodeSession] = field(default_factory=dict)
+    sessions: dict[
+        str,
+        EpisodeSession | SWEGymEpisodeSession,
+    ] = field(default_factory=dict)
 
-    def open(self, session_id: str, task_id: str, split: str | None = None) -> EpisodeSession:
-        """Idempotent: re-seeding an existing rollout must not silently discard its work."""
+    def open(
+        self,
+        session_id: str,
+        task_id: str,
+        split: str | None = None,
+    ) -> EpisodeSession | SWEGymEpisodeSession:
+        """Open one local or SWE-Gym episode.
+
+        Re-seeding an existing rollout returns the same live
+        session and never discards repository modifications.
+        """
+
         if session_id in self.sessions:
             return self.sessions[session_id]
-        task = find_task(task_id, split)
-        parent = None if self.parent is None else Path(self.parent) / session_id
-        if parent is not None:
-            parent.mkdir(parents=True, exist_ok=True)
-        session = EpisodeSession.open(task, parent=parent, limits=self.limits)
+
+        parent = (
+            None
+            if self.parent is None
+            else Path(self.parent) / session_id
+        )
+
+        try:
+            task = find_task(task_id, split)
+
+        except TaskError as local_error:
+            try:
+                swe_gym_task = find_swe_gym_task(
+                    task_id
+                )
+            except TaskError:
+                raise local_error
+
+            sandbox = DockerSandbox.start(
+                swe_gym_task,
+                parent=parent,
+            )
+
+            session = SWEGymEpisodeSession(
+                sandbox=sandbox,
+                max_turns=20,
+            )
+
+        else:
+            if parent is not None:
+                parent.mkdir(
+                    parents=True,
+                    exist_ok=True,
+                )
+
+            session = EpisodeSession.open(
+                task,
+                parent=parent,
+                limits=self.limits,
+            )
+
         self.sessions[session_id] = session
         return session
 
-    def get(self, session_id: str) -> EpisodeSession | None:
+    def get(
+        self,
+        session_id: str,
+    ) -> EpisodeSession | SWEGymEpisodeSession | None:
         return self.sessions.get(session_id)
 
     def close(self, session_id: str) -> None:

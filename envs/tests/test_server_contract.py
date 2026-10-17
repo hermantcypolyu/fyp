@@ -6,7 +6,7 @@ this repo and is not installed by `uv sync`. They *have* been run with the shim
 (`scripts/smoke_one_task.py --transport gym`, reward 1.0 over the real FastAPI app), but
 that cannot be part of the default `make test`.
 
-So their structure is asserted with `ast` instead: the six routes exist and are named
+So their structure is asserted with `ast` instead: the seven routes exist and are named
 exactly as the tool schema says, the verify path goes through the one shared verifier, and
 the agent really is a thin subclass rather than a reimplemented loop. That catches the
 failures that actually happen - a typo'd route, a second scoring path, a copy-pasted loop -
@@ -55,7 +55,7 @@ def _route_paths(tree: ast.Module) -> set[str]:
 # --------------------------------------------------------------------------- app.py
 
 
-def test_app_exposes_exactly_the_six_tools():
+def test_app_exposes_exactly_the_seven_tools():
     assert _route_paths(_tree("app.py")) == {f"/{n}" for n in TOOL_NAMES}
 
 
@@ -149,8 +149,8 @@ def test_agent_reads_the_per_task_turn_cap():
 
 def test_config_points_at_our_modules():
     config = (ENV_DIR / "configs" / "coding_env.yaml").read_text(encoding="utf-8")
-    assert "envs/coding_env/app.py" in config
-    assert "envs/coding_env/agent.py" in config
+    assert "entrypoint: app.py" in config
+    assert "entrypoint: agent.py" in config
 
 
 @pytest.mark.gym

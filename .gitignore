@@ -112,3 +112,14 @@ _vendor/
 third_party/
 nemo-gym/
 results/**/*.bak
+
+# SWE-Gym verifier-only patches
+results/analysis/swe_gym_lite/private/
+
+# Local runtime artifacts
+/nohup.out
+/outputs/
+
+# Local runtime artifacts
+/nohup.out
+/outputs/

@@ -1,0 +1,109 @@
+# NeMo Gym wiring for the progressive iterative coding agent.
+#
+# This configuration preserves a small amount of scaffolding for the
+# Qwen 1.5B policy while allowing iterative error recovery.
+#
+# Forced startup sequence:
+#
+#   Turn 1: list_files
+#   Turn 2: read_file
+#   Turn 3: edit_file
+#
+# From turn 4 onward, no named tool is forced. SimpleAgent therefore restores
+# the request's original tool_choice, normally "auto". The model can inspect
+# the result of the first edit and decide whether to:
+#
+#   - read the file again;
+#   - retry edit_file;
+#   - use write_file;
+#   - run tests;
+#   - revise after test failure;
+#   - submit the completed solution.
+#
+# Intended progressive repair cycle:
+#
+#   inspect
+#   -> initial edit
+#   -> observe edit result
+#   -> read/revise if necessary
+#   -> run tests
+#   -> observe tests
+#   -> revise if necessary
+#   -> submit
+#
+# The original coding_env.yaml remains the fixed five-step baseline:
+#
+#   list_files -> read_file -> edit_file -> run_tests -> submit
+
+coding_env_resources_server:
+  resources_servers:
+    coding_env:
+      entrypoint: app.py
+      domain: coding
+      verified: false
+      description: >
+        Small-repo software engineering with seven tools. Reward is the fraction
+        of a hidden pytest suite passing after the agent submits, zeroed by the
+        5.7 gates. The hidden suite is never materialised in the agent's
+        sandbox.
+
+      # None means one temporary sandbox directory is created per rollout.
+      # The directory is removed when verification finishes.
+      sandbox_root: null
+
+coding_env_agent:
+  responses_api_agents:
+    coding_agent:
+      entrypoint: agent.py
+
+      resources_server:
+        type: resources_servers
+        name: coding_env_resources_server
+
+      model_server:
+        type: responses_api_models
+        name: policy_model
+
+      # This is only the fallback. Each dataset row normally carries its own
+      # metadata.max_turns value, which CodingAgent applies per rollout.
+      max_steps: 40
+
+      # Progressive iterative repair policy:
+      # force repository inspection and one initial edit attempt.
+      first_tool_name: list_files
+      second_tool_name: read_file
+      third_tool_name: replace_lines
+
+      # From turn 4 onward, preserve the request's original tool_choice,
+      # normally "auto". This allows the model to react to edit failures,
+      # retry modifications, run tests, revise, and eventually submit.
+      fourth_tool_name: null
+      fifth_tool_name: null
+
+      # If the model emits ordinary assistant text before submit succeeds,
+      # require a tool call on the next turn. The model still chooses which
+      # available tool to use.
+
+      max_text_only_retries: 3
+
+      # Enable observation-conditioned recovery:
+      # failed edit -> read -> retry edit
+      # successful edit -> run tests
+      adaptive_repair_enabled: true
+
+      # Prevent failed edits from causing an unlimited read/edit loop.
+      max_adaptive_repair_attempts: 2
+
+      # Allow at most two automatic repair cycles after failed tests.
+      max_test_repair_cycles: 2
+
+      datasets:
+        - name: train
+          type: train
+          jsonl_fpath: benchmark/data/train.jsonl
+          license: MIT
+
+        - name: example
+          type: example
+          jsonl_fpath: benchmark/data/example.jsonl
+          license: MIT

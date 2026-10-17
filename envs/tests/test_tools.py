@@ -1,4 +1,4 @@
-"""Tests for the six agent tools (spec 5.5).
+"""Tests for the seven agent tools (spec 5.5 plus line-based editing).
 
 Two things are being pinned down here. The obvious one is that each tool does what it
 says. The important one is the *refusal* behaviour: every path that a reward-hacking or
@@ -281,7 +281,23 @@ def test_call_enforces_the_tool_budget(box):
 
 
 def test_schema_matches_the_implementation():
-    """Exactly six tools, and every advertised name is really callable."""
-    names = [t["name"] for t in TOOL_DEFINITIONS]
-    assert names == ["list_files", "read_file", "write_file", "edit_file", "run_tests", "submit"]
-    assert all(hasattr(Toolbox, n) for n in names)
+    """Exactly seven tools, and every advertised name is really callable."""
+    names = [
+        tool["name"]
+        for tool in TOOL_DEFINITIONS
+    ]
+
+    assert names == [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "replace_lines",
+        "run_tests",
+        "submit",
+    ]
+
+    assert all(
+        hasattr(Toolbox, name)
+        for name in names
+    )

@@ -246,6 +246,15 @@ def test_a_hostile_episode_leaves_the_task_source_byte_identical(sb, task):
         ("write_file", {"path": "solution/gold.patch", "content": ""}),
         ("write_file", {"path": "task.yaml", "content": "id: x"}),
         ("edit_file", {"path": f"tests/{HIDDEN_TEST}", "old_str": "assert", "new_str": "pass  #"}),
+        (
+            "replace_lines",
+            {
+                "path": f"tests/{HIDDEN_TEST}",
+                "start_line": 1,
+                "end_line": 1,
+                "new_lines": ["pass"],
+            },
+        ),
         ("read_file", {"path": f"tests/{HIDDEN_TEST}"}),
     ]
     for name, args in attacks:

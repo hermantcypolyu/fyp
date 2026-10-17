@@ -11,11 +11,11 @@
 coding_env_resources_server:
   resources_servers:
     coding_env:
-      entrypoint: envs/coding_env/app.py
-      domain: code
+      entrypoint: app.py
+      domain: coding
       verified: false
       description: >
-        Small-repo software engineering with six tools. Reward is the fraction of a hidden
+        Small-repo software engineering with seven tools. Reward is the fraction of a hidden
         pytest suite passing after the agent submits, zeroed by the 5.7 gates. The hidden
         suite is never materialised in the agent's sandbox.
       # None -> a temp directory per rollout, removed when /verify returns.
@@ -24,7 +24,7 @@ coding_env_resources_server:
 coding_env_agent:
   responses_api_agents:
     coding_agent:
-      entrypoint: envs/coding_env/agent.py
+      entrypoint: agent.py
       resources_server:
         type: resources_servers
         name: coding_env_resources_server
