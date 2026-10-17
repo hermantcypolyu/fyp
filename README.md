@@ -8,12 +8,16 @@ reward implementation and literature base.
 
 ---
 
-## ⛔ Status: BUILD-ONLY PHASE — no training has been run
+## Status: controlled optimizer update verified; evaluation remains open
 
-This repository is a **cold-start-ready** project folder. Everything needed to begin RL training
-exists, is tested and is documented. **No RL training, no GRPO, no fine-tuning, and no full
-evaluation sweep has been executed.** See [docs/TRAINING_READINESS.md](docs/TRAINING_READINESS.md)
-for exactly what exists, what was never run, and the precise next command.
+On 2026-10-18, one controlled, one-step GRPO-style LoRA optimizer update was completed using
+eight rollouts for a single training task. The update produced finite loss and gradients, changed
+LoRA parameters, and its checkpoint reloaded exactly. This verifies optimizer and checkpoint
+plumbing only; it does **not** show improved coding performance. Full multi-step or large-scale RL,
+a controlled before-and-after evaluation, and held-out evaluation remain incomplete. See
+[docs/PHASE_F4_CONTROLLED_UPDATE.md](docs/PHASE_F4_CONTROLLED_UPDATE.md) for the evidence and
+[docs/TRAINING_READINESS.md](docs/TRAINING_READINESS.md) for the historical handoff and remaining
+work.
 
 ---
 
@@ -42,10 +46,10 @@ Run `make help` for every target.
 | `envs/coding_env/` | NeMo Gym environment: 6-tool resources server, sandbox, verifier, agent harness |
 | `rewards/` | `reward_v1` = hidden-test pass fraction, plus four hard-zero gates |
 | `analysis/` | pass@k with bootstrap CIs, failure taxonomy, rollout trace schema |
-| `configs/` | model / eval / training configs — **training configs are written but never executed** |
+| `configs/` | model / eval / training configs; the controlled Phase F4 optimizer smoke is documented separately |
 | `docs/` | literature review, reward design, task authoring guide, ADRs, training handoff |
 | `scripts/` | serve a model, smoke one task, verify gold patches |
-| `results/` | smoke-test artefacts only in this phase |
+| `results/` | smoke-test artefacts and local, Git-ignored Phase F4 pilot evidence |
 
 ---
 
@@ -65,7 +69,9 @@ Run `make help` for every target.
 
 ## Hard boundaries (see `AGENT_BUILD_SPEC.md` §0.2 and §9)
 
-- No GRPO / PPO / DPO / SFT runs in this phase.
+- No full or multi-step RL run has been completed. One controlled, one-step GRPO-style LoRA
+  optimizer update is documented in
+  [docs/PHASE_F4_CONTROLLED_UPDATE.md](docs/PHASE_F4_CONTROLLED_UPDATE.md).
 - The held-out split is **sealed**; do not open it.
 - Hidden tests are never mounted into the agent's sandbox.
 - No number appears in any document unless a command produced it and the output is under `results/`.

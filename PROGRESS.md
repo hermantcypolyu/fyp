@@ -1029,3 +1029,38 @@ sampled token ids and per-token logprobs through per turn.
 `smoke_one_task.py --limit 1`
 
 **No training run. No weights downloaded. No GPU touched. Held-out sealed and untouched.**
+
+
+## 2026-10-18 · F4 · Controlled one-step GRPO-style LoRA update
+
+This latest entry supersedes earlier dated statements in this append-only log that no training
+had run, no weights had been downloaded, or no checkpoint existed; those describe the state at
+the time of their respective entries.
+
+**Goal:** Verify one real optimizer update and checkpoint round-trip with a small, controlled
+rollout group; this is a plumbing check, not a performance evaluation.
+
+**Done:**
+- Ran one optimizer update from the `rl_smoke_1step` LoRA checkpoint using eight rollouts for
+  `bugfix_filesize_unit_rollover`.
+- Verified finite policy loss and gradients, a completed optimizer step, and changes to 392 LoRA
+  parameter tensors.
+- Saved the updated checkpoint and reloaded all 392 tensors with maximum parameter difference
+  `0.0`.
+- Recorded the evidence and limitations in
+  [`docs/PHASE_F4_CONTROLLED_UPDATE.md`](docs/PHASE_F4_CONTROLLED_UPDATE.md).
+
+**Measured:**
+- Reward mean `-0.125`; reward standard deviation `0.33071891388307384`.
+- Policy loss `-0.1843777285539545`; raw gradient norm `0.34685107521512104`.
+- Parameter delta L2 `0.038865488736174576`.
+- Peak VRAM `19,908.5263671875 MiB`; elapsed training time `23.234683330054395` seconds.
+- Training exit code `0`.
+
+**Artifacts:** Local, Git-ignored evidence and checkpoint under
+`results/raw/phase_f4_controlled_pilot_v1/`; execution logs and the consolidated archive under
+`~/fyp_run_logs/`. Archive SHA-256:
+`64194612afde29579f44a8ffd968ad932a269a33931d70acadec94f1ea2f595c`.
+
+**Not established:** Coding-task improvement, held-out improvement, a higher solve rate, or
+multi-step / large-scale RL stability. The next stage is controlled before-and-after evaluation.

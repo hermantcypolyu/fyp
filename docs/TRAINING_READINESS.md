@@ -2,6 +2,16 @@
 
 Written for someone with no memory of this build.
 
+> **Current status — 2026-10-18:** Phase F4 completed one controlled, one-step GRPO-style LoRA
+> optimizer update using eight rollouts for one task. The loss and gradients were finite, LoRA
+> parameters changed, and the saved checkpoint reloaded exactly. This supersedes the pre-F4
+> statements below that no training had run. It does not demonstrate coding improvement or
+> complete multi-step, large-scale, or held-out evaluation. See
+> [`PHASE_F4_CONTROLLED_UPDATE.md`](PHASE_F4_CONTROLLED_UPDATE.md) for the measured evidence.
+>
+> **Historical snapshot:** Sections 1–8 below describe the 2026-08-03 handoff state. Their
+> unrun-status claims, hardware assumptions, and next-command sequence are not the current status.
+
 > **⚠️ This file did not exist until 2026-08-03.** It is referenced from nine places
 > (`AGENT_BUILD_SPEC.md` §7, `README.md`, four ADRs, `PROGRESS.md`, `docs/nemo_gym_notes.md`,
 > `docs/vram_notes.md`) and the spec calls it "the most important file in the repo", but it was
@@ -51,7 +61,7 @@ sandbox isolation, the reward invariants, and the held-out seal.
 
 ---
 
-## 2. What was never run
+## 2. What had not been run as of 2026-08-03
 
 - **No training.** Not one step, on any hardware.
 - **No weights downloaded.** No model has ever been loaded.
