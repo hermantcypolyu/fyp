@@ -123,3 +123,7 @@ results/analysis/swe_gym_lite/private/
 # Local runtime artifacts
 /nohup.out
 /outputs/
+
+# Local benchmark debugging subsets
+benchmark/data/debug_1p5b_missing_tasks/
+benchmark/data/debug_missing_tasks/
