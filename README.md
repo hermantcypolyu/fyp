@@ -26,7 +26,7 @@ work.
 ```bash
 git clone <this-repo> && cd rl-coding-agents
 uv sync --extra dev          # 1. working environment
-make validate                # 2. all 40 tasks pass schema checks
+make validate                # 2. all 36 tasks pass schema checks
 make verify-gold             # 3. every gold patch fixes its task; untouched repo fails
 make test                    # 4. reward gates, metrics, sandbox isolation
 make smoke                   # 5. one task end-to-end -> a real reward
@@ -42,9 +42,9 @@ Run `make help` for every target.
 
 | Path | What it is |
 |---|---|
-| `benchmark/` | 40 hand-authored Python repair tasks (30 train / 10 held-out) + schema + validator |
-| `envs/coding_env/` | NeMo Gym environment: 6-tool resources server, sandbox, verifier, agent harness |
-| `rewards/` | `reward_v1` = hidden-test pass fraction, plus four hard-zero gates |
+| `benchmark/` | 36 project-specific Python repair tasks (26 train / 10 held-out; authored, textbook-pattern, and real-repo provenance) + schema + validator |
+| `envs/coding_env/` | NeMo Gym environment: seven-tool resources server, sandbox, verifier, agent harness |
+| `rewards/` | `reward_v1` = normalised hidden-test score, plus six hard gates |
 | `analysis/` | pass@k with bootstrap CIs, failure taxonomy, rollout trace schema |
 | `configs/` | model / eval / training configs; the controlled Phase F4 optimizer smoke is documented separately |
 | `docs/` | literature review, reward design, task authoring guide, ADRs, training handoff |
@@ -57,6 +57,8 @@ Run `make help` for every target.
 
 | You want to… | Read |
 |---|---|
+| Present the project to a new audience | [`docs/demo/cantonese_presentation_script.md`](docs/demo/cantonese_presentation_script.md) |
+| Walk through the implementation | [`docs/demo/code_walkthrough.md`](docs/demo/code_walkthrough.md) |
 | Start RL training | [`docs/TRAINING_READINESS.md`](docs/TRAINING_READINESS.md) ⭐ |
 | Understand the reward | [`docs/reward_design.md`](docs/reward_design.md) |
 | Add task #41 | [`docs/task_authoring_guide.md`](docs/task_authoring_guide.md) |

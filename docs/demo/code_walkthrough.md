@@ -289,8 +289,8 @@ A_i = \frac{R_i-\mu_R}{\sigma_R+10^{-6}},
 \sigma_R=\sqrt{\frac{1}{G}\sum_{j=1}^{G}(R_j-\mu_R)^2}
 $$
 
-Here, \(R_i\) is rollout \(i\)'s reward, \(G\) is the number of rollouts in the group,
-\(\mu_R\) is the group mean, and \(\sigma_R\) is the population standard deviation
+Here, $R_i$ is rollout $i$'s reward, $G$ is the number of rollouts in the group,
+$\mu_R$ is the group mean, and $\sigma_R$ is the population standard deviation
 (`statistics.pstdev`). A positive advantage means it scored above its group average; a
 negative advantage means it scored below. The script requires one task per group and stops
 if every reward is identical, because there is no relative signal.
@@ -334,14 +334,14 @@ r_{i,t}(\theta)A_i,\;
 \right)
 $$
 
-Here, \(G\) is the number of rollouts, and \(\mathcal{T}_i\) is the set of trainable
-generated tokens in rollout \(i\). The total number of trainable tokens is:
+Here, $G$ is the number of rollouts, and $\mathcal{T}_i$ is the set of trainable
+generated tokens in rollout $i$. The total number of trainable tokens is:
 
 $$
 N_{\text{train}}=\sum_{i=1}^{G}\left|\mathcal{T}_i\right|
 $$
 
-The probability ratio for token \(t\) in rollout \(i\) is:
+The probability ratio for token $t$ in rollout $i$ is:
 
 $$
 r_{i,t}(\theta)
@@ -352,10 +352,10 @@ r_{i,t}(\theta)
 \right)
 $$
 
-Here, \(\ell_{i,t}(\theta)\) is the updated policy's log probability for the token, and
-\(\ell_{i,t}^{\text{old}}\) is the log probability under the policy that generated the
+Here, $\ell_{i,t}(\theta)$ is the updated policy's log probability for the token, and
+$\ell_{i,t}^{\text{old}}$ is the log probability under the policy that generated the
 rollout. The numerical clamp prevents overflow; it is separate from the PPO clipping to
-\(1-\epsilon\) and \(1+\epsilon\) in the objective above.
+$1-\epsilon$ and $1+\epsilon$ in the objective above.
 
 - The ratio compares the updated policy with the policy that generated the rollout.
 - Clipping limits how much the ratio can influence one update.
