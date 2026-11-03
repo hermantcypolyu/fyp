@@ -16,7 +16,6 @@ from envs.coding_env.tools import (
     Toolbox,
 )
 
-
 ALLOWED = ["repo/pkg/**"]
 FORBIDDEN = [
     "tests/**",
@@ -33,10 +32,7 @@ def box(tmp_path):
     source_dir.mkdir(parents=True)
 
     (source_dir / "mod.py").write_text(
-        "alpha\n"
-        "beta\n"
-        "gamma\n"
-        "delta\n",
+        "alpha\nbeta\ngamma\ndelta\n",
         encoding="utf-8",
     )
 
@@ -64,19 +60,9 @@ def test_replace_lines_replaces_inclusive_range(box):
 
     assert result.ok
 
-    text = (
-        box.root
-        / "repo"
-        / "pkg"
-        / "mod.py"
-    ).read_text(encoding="utf-8")
+    text = (box.root / "repo" / "pkg" / "mod.py").read_text(encoding="utf-8")
 
-    assert text == (
-        "alpha\n"
-        "new_beta\n"
-        "new_gamma\n"
-        "delta\n"
-    )
+    assert text == ("alpha\nnew_beta\nnew_gamma\ndelta\n")
 
     assert "Replaced lines 2-3" in result.output
     assert "repo/pkg/mod.py" in result.output
@@ -92,19 +78,9 @@ def test_replace_lines_replaces_one_line(box):
 
     assert result.ok
 
-    text = (
-        box.root
-        / "repo"
-        / "pkg"
-        / "mod.py"
-    ).read_text(encoding="utf-8")
+    text = (box.root / "repo" / "pkg" / "mod.py").read_text(encoding="utf-8")
 
-    assert text == (
-        "alpha\n"
-        "replacement\n"
-        "gamma\n"
-        "delta\n"
-    )
+    assert text == ("alpha\nreplacement\ngamma\ndelta\n")
 
 
 def test_replace_lines_can_delete_lines(box):
@@ -117,17 +93,9 @@ def test_replace_lines_can_delete_lines(box):
 
     assert result.ok
 
-    text = (
-        box.root
-        / "repo"
-        / "pkg"
-        / "mod.py"
-    ).read_text(encoding="utf-8")
+    text = (box.root / "repo" / "pkg" / "mod.py").read_text(encoding="utf-8")
 
-    assert text == (
-        "alpha\n"
-        "delta\n"
-    )
+    assert text == ("alpha\ndelta\n")
 
 
 def test_replace_lines_can_insert_multiple_lines(box):
@@ -140,21 +108,9 @@ def test_replace_lines_can_insert_multiple_lines(box):
 
     assert result.ok
 
-    text = (
-        box.root
-        / "repo"
-        / "pkg"
-        / "mod.py"
-    ).read_text(encoding="utf-8")
+    text = (box.root / "repo" / "pkg" / "mod.py").read_text(encoding="utf-8")
 
-    assert text == (
-        "alpha\n"
-        "first\n"
-        "second\n"
-        "third\n"
-        "gamma\n"
-        "delta\n"
-    )
+    assert text == ("alpha\nfirst\nsecond\nthird\ngamma\ndelta\n")
 
 
 def test_replace_lines_rejects_start_below_one(box):
@@ -192,19 +148,9 @@ def test_replace_lines_rejects_range_past_end(box):
     assert not result.ok
     assert "has only 4 lines" in result.output
 
-    text = (
-        box.root
-        / "repo"
-        / "pkg"
-        / "mod.py"
-    ).read_text(encoding="utf-8")
+    text = (box.root / "repo" / "pkg" / "mod.py").read_text(encoding="utf-8")
 
-    assert text == (
-        "alpha\n"
-        "beta\n"
-        "gamma\n"
-        "delta\n"
-    )
+    assert text == ("alpha\nbeta\ngamma\ndelta\n")
 
 
 def test_replace_lines_rejects_more_than_12_source_lines(
@@ -213,11 +159,7 @@ def test_replace_lines_rejects_more_than_12_source_lines(
     path = box.root / "repo" / "pkg" / "large.py"
 
     path.write_text(
-        "\n".join(
-            f"line_{number}"
-            for number in range(1, 31)
-        )
-        + "\n",
+        "\n".join(f"line_{number}" for number in range(1, 31)) + "\n",
         encoding="utf-8",
     )
 
@@ -243,9 +185,7 @@ def test_replace_lines_rejects_non_integer_line_numbers(
     )
 
     assert not result.ok
-    assert "start_line and end_line must be integers" in (
-        result.output
-    )
+    assert "start_line and end_line must be integers" in (result.output)
 
 
 def test_replace_lines_rejects_non_string_line(
@@ -287,10 +227,7 @@ def test_replace_lines_rejects_non_list_new_lines(box):
 def test_replace_lines_accepts_legacy_new_str(box):
     path = box.root / "repo" / "pkg" / "legacy.py"
     path.write_text(
-        "def value():\n"
-        "    return 1\n"
-        "gamma\n"
-        "delta\n",
+        "def value():\n    return 1\ngamma\ndelta\n",
         encoding="utf-8",
     )
 
@@ -303,12 +240,7 @@ def test_replace_lines_accepts_legacy_new_str(box):
 
     assert result.ok
 
-    assert path.read_text(encoding="utf-8") == (
-        "def changed():\n"
-        "    return 2\n"
-        "gamma\n"
-        "delta\n"
-    )
+    assert path.read_text(encoding="utf-8") == ("def changed():\n    return 2\ngamma\ndelta\n")
 
 
 def test_replace_lines_rejects_both_replacement_arguments(box):
@@ -339,11 +271,7 @@ def test_replace_lines_requires_replacement_arguments(box):
 
 
 def test_replace_lines_tool_schema_uses_array_of_strings():
-    tool = next(
-        tool
-        for tool in TOOL_DEFINITIONS
-        if tool["name"] == "replace_lines"
-    )
+    tool = next(tool for tool in TOOL_DEFINITIONS if tool["name"] == "replace_lines")
     new_lines_schema = tool["parameters"]["properties"]["new_lines"]
 
     assert new_lines_schema["type"] == "array"
@@ -387,11 +315,7 @@ def test_replace_lines_honours_allowed_write_globs(box):
     assert not result.ok
     assert "only write to" in result.output
 
-    text = (
-        box.root
-        / "repo"
-        / "README.md"
-    ).read_text(encoding="utf-8")
+    text = (box.root / "repo" / "README.md").read_text(encoding="utf-8")
 
     assert text == "read only\n"
     assert not box.gates
@@ -418,9 +342,7 @@ def test_replace_lines_forbidden_path_raises_gate(
 
     assert not result.ok
     assert GATE_TESTS_MODIFIED in box.gates
-    assert hidden_test.read_text(
-        encoding="utf-8"
-    ) == "assert False\n"
+    assert hidden_test.read_text(encoding="utf-8") == "assert False\n"
 
 
 def test_replace_lines_cannot_escape_sandbox(box):
@@ -439,9 +361,7 @@ def test_replace_lines_cannot_escape_sandbox(box):
 
     assert not result.ok
     assert GATE_SANDBOX_ESCAPE in box.gates
-    assert escaped.read_text(
-        encoding="utf-8"
-    ) == "original\n"
+    assert escaped.read_text(encoding="utf-8") == "original\n"
 
 
 def test_replace_lines_dispatches_and_logs(box):
@@ -480,8 +400,7 @@ def test_replace_lines_accepts_valid_python(box):
     path = box.root / "repo" / "pkg" / "valid.py"
 
     path.write_text(
-        "def value():\n"
-        "    return 1\n",
+        "def value():\n    return 1\n",
         encoding="utf-8",
     )
 
@@ -494,19 +413,13 @@ def test_replace_lines_accepts_valid_python(box):
 
     assert result.ok
 
-    assert path.read_text(encoding="utf-8") == (
-        "def value():\n"
-        "    return 2\n"
-    )
+    assert path.read_text(encoding="utf-8") == ("def value():\n    return 2\n")
 
 
 def test_replace_lines_rejects_invalid_python(box):
     path = box.root / "repo" / "pkg" / "invalid.py"
 
-    original = (
-        "def value():\n"
-        "    return 1\n"
-    )
+    original = "def value():\n    return 1\n"
 
     path.write_text(
         original,
@@ -530,12 +443,7 @@ def test_replace_lines_rejects_invalid_python(box):
 def test_invalid_python_preserves_original_bytes(box):
     path = box.root / "repo" / "pkg" / "preserved.py"
 
-    original = (
-        "import os\n"
-        "\n"
-        "def value():\n"
-        "    return os.name\n"
-    )
+    original = "import os\n\ndef value():\n    return os.name\n"
 
     path.write_text(
         original,
@@ -558,13 +466,7 @@ def test_invalid_python_preserves_original_bytes(box):
 def test_python_syntax_error_reports_line_number(box):
     path = box.root / "repo" / "pkg" / "line_error.py"
 
-    original = (
-        "def first():\n"
-        "    return 1\n"
-        "\n"
-        "def second():\n"
-        "    return 2\n"
-    )
+    original = "def first():\n    return 1\n\ndef second():\n    return 2\n"
 
     path.write_text(
         original,
@@ -588,8 +490,7 @@ def test_replace_lines_does_not_parse_non_python_text(box):
     path = box.root / "repo" / "pkg" / "notes.txt"
 
     path.write_text(
-        "alpha\n"
-        "beta\n",
+        "alpha\nbeta\n",
         encoding="utf-8",
     )
 
@@ -602,17 +503,13 @@ def test_replace_lines_does_not_parse_non_python_text(box):
 
     assert result.ok
 
-    assert path.read_text(encoding="utf-8") == (
-        "alpha\n"
-        "this is not Python: !!!\n"
-    )
+    assert path.read_text(encoding="utf-8") == ("alpha\nthis is not Python: !!!\n")
 
 
 def test_replace_lines_accepts_structured_new_lines(box):
     path = box.root / "repo" / "pkg" / "mod.py"
     path.write_text(
-        "alpha\n"
-        "beta\n",
+        "alpha\nbeta\n",
         encoding="utf-8",
     )
 
@@ -628,10 +525,7 @@ def test_replace_lines_accepts_structured_new_lines(box):
 
     assert result.ok
 
-    assert path.read_text(encoding="utf-8") == (
-        "def changed():\n"
-        "    return 2\n"
-    )
+    assert path.read_text(encoding="utf-8") == ("def changed():\n    return 2\n")
 
 
 def test_replace_lines_rejects_no_op_replacement(box):

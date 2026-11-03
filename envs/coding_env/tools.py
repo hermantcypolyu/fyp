@@ -386,87 +386,50 @@ class Toolbox:
             or not isinstance(start_line, int)
             or not isinstance(end_line, int)
         ):
-            return _err(
-                "start_line and end_line must be integers."
-            )
+            return _err("start_line and end_line must be integers.")
 
         if start_line < 1:
-            return _err(
-                "start_line must be at least 1."
-            )
+            return _err("start_line must be at least 1.")
 
         if end_line < start_line:
-            return _err(
-                f"end_line={end_line} is before "
-                f"start_line={start_line} in {rel}."
-            )
+            return _err(f"end_line={end_line} is before start_line={start_line} in {rel}.")
 
         if new_str is not None and new_lines is not None:
-            return _err(
-                "provide either new_str or new_lines, "
-                "not both."
-            )
+            return _err("provide either new_str or new_lines, not both.")
 
         if new_str is None and new_lines is None:
-            return _err(
-                "provide new_lines with one source "
-                "line per item."
-            )
+            return _err("provide new_lines with one source line per item.")
 
         if new_lines is not None:
             if not isinstance(new_lines, list):
-                return _err(
-                    "new_lines must be a list of strings."
-                )
+                return _err("new_lines must be a list of strings.")
 
-            if not all(
-                isinstance(line, str)
-                for line in new_lines
-            ):
-                return _err(
-                    "new_lines must contain only strings."
-                )
+            if not all(isinstance(line, str) for line in new_lines):
+                return _err("new_lines must contain only strings.")
 
             replacement_lines = list(new_lines)
         else:
             if not isinstance(new_str, str):
-                return _err(
-                    f"new_str must be a string, got "
-                    f"{type(new_str).__name__}."
-                )
+                return _err(f"new_str must be a string, got {type(new_str).__name__}.")
 
             # Keep older tool callers and saved trajectories compatible.
-            replacement_lines = (
-                new_str.splitlines()
-                if new_str
-                else []
-            )
+            replacement_lines = new_str.splitlines() if new_str else []
 
         try:
-            original_text = target.read_text(
-                encoding="utf-8"
-            )
+            original_text = target.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            return _err(
-                f"{rel} is not UTF-8 text."
-            )
+            return _err(f"{rel} is not UTF-8 text.")
 
         original_lines = original_text.splitlines()
         total_lines = len(original_lines)
 
         if end_line > total_lines:
-            return _err(
-                f"{rel} has only {total_lines} lines; "
-                f"end_line={end_line} is past the end."
-            )
+            return _err(f"{rel} has only {total_lines} lines; end_line={end_line} is past the end.")
 
         replaced_count = end_line - start_line + 1
 
         if replaced_count > MAX_REPLACE_LINES:
-            return _err(
-                f"replace_lines may replace at most "
-                f"{MAX_REPLACE_LINES} lines at once."
-            )
+            return _err(f"replace_lines may replace at most {MAX_REPLACE_LINES} lines at once.")
 
         updated_lines = [
             *original_lines[: start_line - 1],
@@ -482,10 +445,7 @@ class Toolbox:
             updated_text += "\n"
 
         if updated_text == original_text:
-            return _err(
-                f"replacement makes no changes to {rel}. "
-                "Revise new_lines before retrying."
-            )
+            return _err(f"replacement makes no changes to {rel}. Revise new_lines before retrying.")
 
         if target.suffix == ".py":
             try:
@@ -494,11 +454,7 @@ class Toolbox:
                     filename=rel,
                 )
             except SyntaxError as exc:
-                line_number = (
-                    exc.lineno
-                    if exc.lineno is not None
-                    else "unknown"
-                )
+                line_number = exc.lineno if exc.lineno is not None else "unknown"
 
                 return _err(
                     f"replacement would make {rel} invalid Python: "
@@ -523,8 +479,7 @@ class Toolbox:
 
         if updated_lines:
             preview = "\n".join(
-                f"{line_number} | "
-                f"{updated_lines[line_number - 1]}"
+                f"{line_number} | {updated_lines[line_number - 1]}"
                 for line_number in range(
                     preview_first,
                     preview_last + 1,
@@ -534,10 +489,7 @@ class Toolbox:
             preview = "(file is now empty)"
 
         return _ok(
-            f"Replaced lines {start_line}-{end_line} "
-            f"in {rel}.\n"
-            f"Updated preview:\n"
-            f"{preview}",
+            f"Replaced lines {start_line}-{end_line} in {rel}.\nUpdated preview:\n{preview}",
             BUDGET_READ_FILE,
         )
 
@@ -673,23 +625,17 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": (
-                        "Sandbox-relative source file to edit."
-                    ),
+                    "description": ("Sandbox-relative source file to edit."),
                 },
                 "start_line": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": (
-                        "First existing line to replace, 1-based."
-                    ),
+                    "description": ("First existing line to replace, 1-based."),
                 },
                 "end_line": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": (
-                        "Last existing line to replace, inclusive."
-                    ),
+                    "description": ("Last existing line to replace, inclusive."),
                 },
                 "new_lines": {
                     "type": "array",

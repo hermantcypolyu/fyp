@@ -282,10 +282,7 @@ def test_call_enforces_the_tool_budget(box):
 
 def test_schema_matches_the_implementation():
     """Exactly seven tools, and every advertised name is really callable."""
-    names = [
-        tool["name"]
-        for tool in TOOL_DEFINITIONS
-    ]
+    names = [tool["name"] for tool in TOOL_DEFINITIONS]
 
     assert names == [
         "list_files",
@@ -297,7 +294,4 @@ def test_schema_matches_the_implementation():
         "submit",
     ]
 
-    assert all(
-        hasattr(Toolbox, name)
-        for name in names
-    )
+    assert all(hasattr(Toolbox, name) for name in names)

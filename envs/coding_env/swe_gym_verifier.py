@@ -25,18 +25,12 @@ def verify_candidate(
 ) -> dict[str, Any]:
     """Verify one agent-generated candidate patch in a clean container."""
 
-    candidate_patch_path = Path(
-        candidate_patch_path
-    ).resolve()
+    candidate_patch_path = Path(candidate_patch_path).resolve()
 
     if not candidate_patch_path.is_file():
-        raise FileNotFoundError(
-            candidate_patch_path
-        )
+        raise FileNotFoundError(candidate_patch_path)
 
-    rows = load_manifest(
-        Path(manifest_path)
-    )
+    rows = load_manifest(Path(manifest_path))
 
     row = select_instance(
         rows,

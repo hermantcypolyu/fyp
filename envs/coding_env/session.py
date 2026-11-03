@@ -59,9 +59,7 @@ def find_swe_gym_task(task_id: str) -> DockerTask:
     try:
         return tasks[task_id]
     except KeyError as exc:
-        raise TaskError(
-            f"no SWE-Gym pilot task {task_id!r}"
-        ) from exc
+        raise TaskError(f"no SWE-Gym pilot task {task_id!r}") from exc
 
 
 def episode_metadata(task: Task) -> dict[str, str]:
@@ -172,22 +170,19 @@ class SessionStore:
         if session_id in self.sessions:
             return self.sessions[session_id]
 
-        parent = (
-            None
-            if self.parent is None
-            else Path(self.parent) / session_id
-        )
+        parent = None if self.parent is None else Path(self.parent) / session_id
 
         try:
             task = find_task(task_id, split)
 
         except TaskError as local_error:
             try:
-                swe_gym_task = find_swe_gym_task(
-                    task_id
-                )
+                swe_gym_task = find_swe_gym_task(task_id)
             except TaskError:
-                raise local_error
+                # Chain explicitly: the local-task failure is the actionable cause, and the
+                # swe_gym lookup is only the fallback that came up empty. `from` keeps the
+                # original traceback for a task_id that exists in neither registry.
+                raise local_error from None
 
             sandbox = DockerSandbox.start(
                 swe_gym_task,

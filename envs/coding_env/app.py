@@ -91,10 +91,7 @@ class ReplaceLinesRequest(BaseModel):
     @model_validator(mode="after")
     def validate_replacement(self) -> ReplaceLinesRequest:
         if self.new_str is not None and self.new_lines is not None:
-            raise ValueError(
-                "provide either new_str or new_lines, "
-                "not both"
-            )
+            raise ValueError("provide either new_str or new_lines, not both")
 
         if self.new_str is None and self.new_lines is None:
             raise ValueError("new_lines is required")

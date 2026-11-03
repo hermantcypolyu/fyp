@@ -87,10 +87,7 @@ def _test_run(
         _function_output(
             call_id=call_id,
             ok=True,
-            output=(
-                f"{passed}/{total} passed "
-                "(smoke tests only; these are not the grading tests)"
-            ),
+            output=(f"{passed}/{total} passed (smoke tests only; these are not the grading tests)"),
         ),
     ]
 
@@ -278,10 +275,7 @@ def test_syntax_rejection_does_not_create_positive_progress() -> None:
     output = _modification(
         call_id="modify_1",
         ok=False,
-        output=(
-            "Error: replacement would make repo/example.py "
-            "invalid Python. No changes were written."
-        ),
+        output=("Error: replacement would make repo/example.py invalid Python. No changes were written."),
     )
 
     metrics = score_row(_row(output=output))
@@ -296,10 +290,7 @@ def test_no_op_rejection_does_not_create_positive_progress() -> None:
     output = _modification(
         call_id="modify_1",
         ok=False,
-        output=(
-            "Error: replacement makes no changes to "
-            "repo/example.py. Revise new_lines before retrying."
-        ),
+        output=("Error: replacement makes no changes to repo/example.py. Revise new_lines before retrying."),
     )
 
     metrics = score_row(_row(output=output))

@@ -398,7 +398,7 @@ def _grpo_advantages(rewards: list[float], *, leave_one_out: bool, normalize: bo
     else:
         baselines = [total / n] * n
 
-    advantages = [r - b for r, b in zip(rewards, baselines)]
+    advantages = [r - b for r, b in zip(rewards, baselines, strict=True)]
     if not normalize:
         return advantages
 

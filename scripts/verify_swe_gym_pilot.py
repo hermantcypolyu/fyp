@@ -15,24 +15,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-DEFAULT_MANIFEST = (
-    PROJECT_ROOT
-    / "results"
-    / "analysis"
-    / "swe_gym_lite"
-    / "pilot_5_verification_manifest.json"
-)
+DEFAULT_MANIFEST = PROJECT_ROOT / "results" / "analysis" / "swe_gym_lite" / "pilot_5_verification_manifest.json"
 
-DEFAULT_RESULTS_DIR = (
-    PROJECT_ROOT
-    / "results"
-    / "analysis"
-    / "swe_gym_lite"
-    / "verification"
-)
+DEFAULT_RESULTS_DIR = PROJECT_ROOT / "results" / "analysis" / "swe_gym_lite" / "verification"
 
 PYTEST_PYTHON = "/opt/miniconda3/envs/testbed/bin/python"
 
@@ -40,7 +27,6 @@ PYTEST_SUMMARY_PATTERN = re.compile(
     r"(?P<count>\d+)\s+"
     r"(?P<status>passed|failed|error|errors|skipped)"
 )
-
 
 
 def resolve_project_path(value: str | Path) -> Path:
@@ -81,17 +67,10 @@ def select_instance(
     rows: list[dict[str, Any]],
     instance_id: str,
 ) -> dict[str, Any]:
-    matches = [
-        row
-        for row in rows
-        if row.get("instance_id") == instance_id
-    ]
+    matches = [row for row in rows if row.get("instance_id") == instance_id]
 
     if len(matches) != 1:
-        raise ValueError(
-            f"Expected one manifest row for {instance_id!r}, "
-            f"found {len(matches)}."
-        )
+        raise ValueError(f"Expected one manifest row for {instance_id!r}, found {len(matches)}.")
 
     return matches[0]
 
@@ -264,41 +243,26 @@ def verify_instance(
     candidate_patch_path: Path | None = None,
 ) -> dict[str, Any]:
     instance_id = str(row["instance_id"])
-    pytest_extra_args = (
-        ["-p", "no:snail"]
-        if instance_id == "facebookresearch__hydra-1741"
-        else []
-    )
+    pytest_extra_args = ["-p", "no:snail"] if instance_id == "facebookresearch__hydra-1741" else []
     image = str(row["image"])
     base_commit = str(row["base_commit"])
 
     fail_to_pass = list(row.get("fail_to_pass") or [])
     pass_to_pass = list(row.get("pass_to_pass") or [])
 
-    test_patch_path = resolve_project_path(
-        row["test_patch_path"]
-    )
+    test_patch_path = resolve_project_path(row["test_patch_path"])
 
-    gold_patch_path = resolve_project_path(
-        row["gold_patch_path"]
-    )
+    gold_patch_path = resolve_project_path(row["gold_patch_path"])
 
     if candidate_patch_path is not None:
-        candidate_patch_path = Path(
-            candidate_patch_path
-        ).resolve()
+        candidate_patch_path = Path(candidate_patch_path).resolve()
 
     if mode == "candidate":
         if candidate_patch_path is None:
-            raise ValueError(
-                "candidate mode requires "
-                "--candidate-patch."
-            )
+            raise ValueError("candidate mode requires --candidate-patch.")
 
         if not candidate_patch_path.is_file():
-            raise FileNotFoundError(
-                candidate_patch_path
-            )
+            raise FileNotFoundError(candidate_patch_path)
 
     if not test_patch_path.is_file():
         raise FileNotFoundError(test_patch_path)
@@ -306,10 +270,7 @@ def verify_instance(
     if not gold_patch_path.is_file():
         raise FileNotFoundError(gold_patch_path)
 
-    container_name = (
-        "hermanyeung-swegym-verify-"
-        f"{safe_container_suffix(instance_id)}"
-    )
+    container_name = f"hermanyeung-swegym-verify-{safe_container_suffix(instance_id)}"
 
     result: dict[str, Any] = {
         "instance_id": instance_id,
@@ -323,16 +284,9 @@ def verify_instance(
         "gold_patch_applied": False,
         "candidate_patch_applied": False,
         "candidate_patch_empty": False,
-        "candidate_patch_path": (
-            str(candidate_patch_path)
-            if candidate_patch_path is not None
-            else None
-        ),
+        "candidate_patch_path": (str(candidate_patch_path) if candidate_patch_path is not None else None),
         "tests_passed": 0,
-        "tests_total": (
-            len(fail_to_pass)
-            + len(pass_to_pass)
-        ),
+        "tests_total": (len(fail_to_pass) + len(pass_to_pass)),
         "floor_tests": len(pass_to_pass),
         "tests_above_floor": 0,
         "candidate_solved": False,
@@ -415,23 +369,16 @@ def verify_instance(
             check=True,
         )
 
-        actual_commit = (
-            commit_result.stdout or ""
-        ).strip()
+        actual_commit = (commit_result.stdout or "").strip()
 
         result["base_commit_actual"] = actual_commit
-        result["base_commit_match"] = (
-            actual_commit == base_commit
-        )
+        result["base_commit_match"] = actual_commit == base_commit
 
         print("Expected commit:", base_commit)
         print("Actual commit:  ", actual_commit)
 
         if not result["base_commit_match"]:
-            raise RuntimeError(
-                "Docker image Git HEAD does not match "
-                "the dataset base_commit."
-            )
+            raise RuntimeError("Docker image Git HEAD does not match the dataset base_commit.")
 
         stream_private_file(
             container_name=container_name,
@@ -443,9 +390,7 @@ def verify_instance(
 
         apply_patch(
             container_name=container_name,
-            patch_path=(
-                "/testbed/.swegym_test.patch"
-            ),
+            patch_path=("/testbed/.swegym_test.patch"),
         )
 
         result["test_patch_applied"] = True
@@ -465,31 +410,16 @@ def verify_instance(
                 pytest_extra_args=pytest_extra_args,
             )
 
-            result["fail_to_pass_result"] = (
-                fail_result
-            )
-            result["pass_to_pass_result"] = (
-                pass_result
-            )
+            result["fail_to_pass_result"] = fail_result
+            result["pass_to_pass_result"] = pass_result
 
-            fail_group_failed = (
-                fail_result["exit_code"] != 0
-            )
-            pass_group_passed = (
-                pass_result["exit_code"] == 0
-            )
+            fail_group_failed = fail_result["exit_code"] != 0
+            pass_group_passed = pass_result["exit_code"] == 0
 
-            if (
-                fail_group_failed
-                and pass_group_passed
-            ):
-                result["validation_status"] = (
-                    "baseline_valid"
-                )
+            if fail_group_failed and pass_group_passed:
+                result["validation_status"] = "baseline_valid"
             else:
-                result["validation_status"] = (
-                    "baseline_invalid"
-                )
+                result["validation_status"] = "baseline_invalid"
 
         elif mode == "gold":
             stream_private_file(
@@ -502,9 +432,7 @@ def verify_instance(
 
             apply_patch(
                 container_name=container_name,
-                patch_path=(
-                    "/testbed/.swegym_gold.patch"
-                ),
+                patch_path=("/testbed/.swegym_gold.patch"),
             )
 
             result["gold_patch_applied"] = True
@@ -522,54 +450,35 @@ def verify_instance(
             result["gold_result"] = gold_result
 
             if gold_result["exit_code"] == 0:
-                result["validation_status"] = (
-                    "gold_valid"
-                )
+                result["validation_status"] = "gold_valid"
             else:
-                result["validation_status"] = (
-                    "gold_invalid"
-                )
+                result["validation_status"] = "gold_invalid"
 
         elif mode == "candidate":
             assert candidate_patch_path is not None
 
-            candidate_is_empty = (
-                candidate_patch_path.stat().st_size
-                == 0
-            )
+            candidate_is_empty = candidate_patch_path.stat().st_size == 0
 
-            result["candidate_patch_empty"] = (
-                candidate_is_empty
-            )
+            result["candidate_patch_empty"] = candidate_is_empty
 
             if candidate_is_empty:
-                print(
-                    "Candidate patch is empty; "
-                    "verifying the untouched repository."
-                )
+                print("Candidate patch is empty; verifying the untouched repository.")
 
             else:
                 stream_private_file(
                     container_name=container_name,
                     source=candidate_patch_path,
-                    destination=(
-                        ".swegym_candidate.patch"
-                    ),
+                    destination=(".swegym_candidate.patch"),
                 )
 
                 print("Applying candidate patch...")
 
                 apply_patch(
                     container_name=container_name,
-                    patch_path=(
-                        "/testbed/"
-                        ".swegym_candidate.patch"
-                    ),
+                    patch_path=("/testbed/.swegym_candidate.patch"),
                 )
 
-                result[
-                    "candidate_patch_applied"
-                ] = True
+                result["candidate_patch_applied"] = True
 
             fail_result = run_pytest(
                 container_name=container_name,
@@ -585,25 +494,14 @@ def verify_instance(
                 pytest_extra_args=pytest_extra_args,
             )
 
-            result["fail_to_pass_result"] = (
-                fail_result
-            )
-            result["pass_to_pass_result"] = (
-                pass_result
-            )
+            result["fail_to_pass_result"] = fail_result
+            result["pass_to_pass_result"] = pass_result
 
-            fail_passed = fail_result[
-                "summary_counts"
-            ].get("passed", 0)
+            fail_passed = fail_result["summary_counts"].get("passed", 0)
 
-            pass_passed = pass_result[
-                "summary_counts"
-            ].get("passed", 0)
+            pass_passed = pass_result["summary_counts"].get("passed", 0)
 
-            tests_passed = (
-                fail_passed
-                + pass_passed
-            )
+            tests_passed = fail_passed + pass_passed
 
             floor_tests = len(pass_to_pass)
 
@@ -614,28 +512,17 @@ def verify_instance(
                 0,
             )
 
-            candidate_solved = (
-                fail_result["exit_code"] == 0
-                and pass_result["exit_code"] == 0
-            )
+            candidate_solved = fail_result["exit_code"] == 0 and pass_result["exit_code"] == 0
 
-            result["candidate_solved"] = (
-                candidate_solved
-            )
+            result["candidate_solved"] = candidate_solved
 
-            result["validation_status"] = (
-                "candidate_valid"
-            )
+            result["validation_status"] = "candidate_valid"
 
         else:
-            raise ValueError(
-                f"Unsupported mode: {mode}"
-            )
+            raise ValueError(f"Unsupported mode: {mode}")
 
     except Exception as exc:
-        result["error"] = (
-            f"{type(exc).__name__}: {exc}"
-        )
+        result["error"] = f"{type(exc).__name__}: {exc}"
 
         print(
             "\nVerification error:",
@@ -655,19 +542,14 @@ def verify_instance(
             capture_output=True,
         )
 
-        result["container_cleaned"] = (
-            cleanup.returncode == 0
-        )
+        result["container_cleaned"] = cleanup.returncode == 0
 
     return result
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Verify one SWE-Gym Lite pilot instance "
-            "using an isolated Docker container."
-        )
+        description=("Verify one SWE-Gym Lite pilot instance using an isolated Docker container.")
     )
 
     parser.add_argument(
@@ -697,10 +579,7 @@ def parse_args() -> argparse.Namespace:
         "--candidate-patch",
         type=Path,
         default=None,
-        help=(
-            "Agent-generated Git patch. Required "
-            "when --mode candidate is selected."
-        ),
+        help=("Agent-generated Git patch. Required when --mode candidate is selected."),
     )
 
     parser.add_argument(
@@ -733,18 +612,13 @@ def main() -> int:
         row=row,
         mode=args.mode,
         pull=args.pull,
-        candidate_patch_path=(
-            args.candidate_patch
-        ),
+        candidate_patch_path=(args.candidate_patch),
     )
 
     output_path = args.output
 
     if output_path is None:
-        output_path = (
-            DEFAULT_RESULTS_DIR
-            / f"{args.instance_id}.{args.mode}.json"
-        )
+        output_path = DEFAULT_RESULTS_DIR / f"{args.instance_id}.{args.mode}.json"
 
     output_path.parent.mkdir(
         parents=True,
@@ -777,10 +651,7 @@ def main() -> int:
         "candidate": "candidate_valid",
     }[args.mode]
 
-    return int(
-        result["validation_status"]
-        != valid_status
-    )
+    return int(result["validation_status"] != valid_status)
 
 
 if __name__ == "__main__":

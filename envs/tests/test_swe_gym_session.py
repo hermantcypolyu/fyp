@@ -9,7 +9,6 @@ import pytest
 
 from envs.coding_env.verifier import GATE_NO_SUBMIT, VerifyResult
 
-
 INSTANCE_ID = "getmoto__moto-5699"
 
 
@@ -146,9 +145,7 @@ def test_grade_converts_candidate_result_to_verify_result(
     assert result.passed == 2
     assert result.collected == 3
     assert result.floor_tests == 2
-    assert result.pass_fraction == pytest.approx(
-        2 / 3
-    )
+    assert result.pass_fraction == pytest.approx(2 / 3)
     assert result.reward == 0.0
     assert result.submitted
     assert result.gates == []
@@ -171,17 +168,13 @@ def test_empty_patch_is_still_verifiable(
         calls.append(
             {
                 "instance_id": instance_id,
-                "patch_bytes": (
-                    candidate_patch_path.stat().st_size
-                ),
+                "patch_bytes": (candidate_patch_path.stat().st_size),
             }
         )
 
         return candidate_result()
 
-    sandbox = FakeDockerSandbox(
-        tmp_path / "work"
-    )
+    sandbox = FakeDockerSandbox(tmp_path / "work")
 
     sandbox.export_patch = lambda: ""
     sandbox.toolbox.submitted = True

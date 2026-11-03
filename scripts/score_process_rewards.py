@@ -17,7 +17,6 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
-
 MODIFICATION_TOOLS = {
     "edit_file",
     "write_file",
@@ -29,9 +28,7 @@ SECURITY_GATES = {
     "tests_modified",
 }
 
-TEST_RESULT_PATTERN = re.compile(
-    r"(\d+)/(\d+)\s+passed"
-)
+TEST_RESULT_PATTERN = re.compile(r"(\d+)/(\d+)\s+passed")
 
 
 @dataclass
@@ -103,9 +100,7 @@ def score_row(row: dict[str, Any]) -> ProcessMetrics:
     )
 
     gates = set(row.get("gates") or [])
-    metrics.security_violation = bool(
-        gates & SECURITY_GATES
-    )
+    metrics.security_violation = bool(gates & SECURITY_GATES)
 
     tests_passed = int(row.get("tests_passed") or 0)
     floor_tests = int(row.get("floor_tests") or 0)
@@ -120,9 +115,7 @@ def score_row(row: dict[str, Any]) -> ProcessMetrics:
         0,
     )
 
-    metrics.final_tests_regressed = (
-        tests_passed < floor_tests
-    )
+    metrics.final_tests_regressed = tests_passed < floor_tests
 
     workspace_revision = 0
     tested_revisions: set[int] = set()
@@ -140,10 +133,7 @@ def score_row(row: dict[str, Any]) -> ProcessMetrics:
             metrics.tool_calls += 1
             continue
 
-        if (
-            item_type != "function_call_output"
-            or pending_call is None
-        ):
+        if item_type != "function_call_output" or pending_call is None:
             continue
 
         tool_name = pending_call.get("name")
@@ -168,9 +158,7 @@ def score_row(row: dict[str, Any]) -> ProcessMetrics:
                         metrics.no_op_rejections += 1
 
         elif tool_name == "run_tests":
-            test_result = parse_visible_test_result(
-                tool_output
-            )
+            test_result = parse_visible_test_result(tool_output)
 
             if workspace_revision == 0:
                 # Testing an unchanged repository does not demonstrate
@@ -189,11 +177,7 @@ def score_row(row: dict[str, Any]) -> ProcessMetrics:
                 if total > 0:
                     visible_fraction = passed / total
 
-                    if (
-                        best_visible_fraction is not None
-                        and visible_fraction
-                        > best_visible_fraction
-                    ):
+                    if best_visible_fraction is not None and visible_fraction > best_visible_fraction:
                         metrics.test_improvements += 1
 
                     if (
@@ -203,14 +187,8 @@ def score_row(row: dict[str, Any]) -> ProcessMetrics:
                     ):
                         metrics.collection_recoveries += 1
 
-                    if (
-                        best_visible_fraction is None
-                        or visible_fraction
-                        > best_visible_fraction
-                    ):
-                        best_visible_fraction = (
-                            visible_fraction
-                        )
+                    if best_visible_fraction is None or visible_fraction > best_visible_fraction:
+                        best_visible_fraction = visible_fraction
 
                     previous_visible_total = total
 
@@ -222,57 +200,84 @@ def score_row(row: dict[str, Any]) -> ProcessMetrics:
     # does not regress below its original hidden-test floor. This prevents
     # destructive but tool-valid edits from receiving a higher score.
     if not metrics.final_tests_regressed:
-        score += min(
-            metrics.successful_modifications,
-            2,
-        ) * 0.03
+        score += (
+            min(
+                metrics.successful_modifications,
+                2,
+            )
+            * 0.03
+        )
 
-        score += min(
-            metrics.meaningful_test_runs,
-            2,
-        ) * 0.04
+        score += (
+            min(
+                metrics.meaningful_test_runs,
+                2,
+            )
+            * 0.04
+        )
 
     # Observable repair progress receives stronger credit.
-    score += min(
-        metrics.test_improvements,
-        2,
-    ) * 0.15
+    score += (
+        min(
+            metrics.test_improvements,
+            2,
+        )
+        * 0.15
+    )
 
-    score += min(
-        metrics.collection_recoveries,
-        1,
-    ) * 0.10
+    score += (
+        min(
+            metrics.collection_recoveries,
+            1,
+        )
+        * 0.10
+    )
 
     if metrics.submitted:
         score += 0.10
 
     # Hidden-test improvement remains the strongest progress signal.
-    score += min(
-        metrics.tests_above_floor,
-        3,
-    ) * 0.25
+    score += (
+        min(
+            metrics.tests_above_floor,
+            3,
+        )
+        * 0.25
+    )
 
     # Penalise invalid or unproductive actions. These penalties mainly offset
     # other process credits because the final score is clamped to -1.0.
-    score -= min(
-        metrics.failed_modifications,
-        3,
-    ) * 0.02
+    score -= (
+        min(
+            metrics.failed_modifications,
+            3,
+        )
+        * 0.02
+    )
 
-    score -= min(
-        metrics.syntax_rejections,
-        3,
-    ) * 0.03
+    score -= (
+        min(
+            metrics.syntax_rejections,
+            3,
+        )
+        * 0.03
+    )
 
-    score -= min(
-        metrics.no_op_rejections,
-        3,
-    ) * 0.05
+    score -= (
+        min(
+            metrics.no_op_rejections,
+            3,
+        )
+        * 0.05
+    )
 
-    score -= min(
-        metrics.repeated_test_runs,
-        3,
-    ) * 0.10
+    score -= (
+        min(
+            metrics.repeated_test_runs,
+            3,
+        )
+        * 0.10
+    )
 
     # A repository that finishes below its original verification floor must
     # not outrank a safe trajectory merely because tools returned ok=true.
@@ -292,13 +297,7 @@ def score_row(row: dict[str, Any]) -> ProcessMetrics:
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [
-        json.loads(line)
-        for line in path.read_text(
-            encoding="utf-8"
-        ).splitlines()
-        if line.strip()
-    ]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def main() -> None:
@@ -395,10 +394,7 @@ def main() -> None:
             metrics.security_violation,
         )
 
-    scores = [
-        metrics.process_score
-        for metrics in all_metrics
-    ]
+    scores = [metrics.process_score for metrics in all_metrics]
 
     unique_scores = sorted(set(scores))
 
@@ -408,21 +404,15 @@ def main() -> None:
     print("Unique score count:", len(unique_scores))
     print(
         "Mean process score:",
-        round(mean(scores), 4)
-        if scores
-        else None,
+        round(mean(scores), 4) if scores else None,
     )
     print(
         "Minimum:",
-        min(scores)
-        if scores
-        else None,
+        min(scores) if scores else None,
     )
     print(
         "Maximum:",
-        max(scores)
-        if scores
-        else None,
+        max(scores) if scores else None,
     )
 
 

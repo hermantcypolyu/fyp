@@ -8,7 +8,6 @@ from benchmark.tools.task_loader import iter_tasks
 from envs.coding_env.session import episode_metadata
 from envs.coding_env.tools import TOOL_DEFINITIONS
 
-
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "benchmark" / "data"
 
@@ -126,10 +125,7 @@ def gym_tools(task: Any) -> list[dict[str, Any]]:
                     },
                     "new_str": {
                         "type": "string",
-                        "description": (
-                            "Replacement source text implementing the smallest "
-                            "correct repair."
-                        ),
+                        "description": ("Replacement source text implementing the smallest correct repair."),
                     },
                 },
                 "required": ["path", "old_str", "new_str"],
@@ -149,17 +145,13 @@ def gym_tools(task: Any) -> list[dict[str, Any]]:
                         "type": "integer",
                         "minimum": 1,
                         "description": (
-                            "First existing source line to replace, "
-                            "using the 1-based numbers from read_file."
+                            "First existing source line to replace, using the 1-based numbers from read_file."
                         ),
                     },
                     "end_line": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": (
-                            "Last existing source line to replace, "
-                            "inclusive."
-                        ),
+                        "description": ("Last existing source line to replace, inclusive."),
                     },
                     "new_lines": {
                         "type": "array",
@@ -231,9 +223,7 @@ def write_jsonl(
 
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
-            handle.write(
-                json.dumps(row, ensure_ascii=False) + "\n"
-            )
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def main() -> None:

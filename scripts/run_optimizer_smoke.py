@@ -72,20 +72,13 @@ def parse_args() -> argparse.Namespace:
         "--adapter-checkpoint",
         type=Path,
         default=None,
-        help=(
-            "Existing LoRA checkpoint to continue training from. "
-            "If omitted, a new LoRA adapter is created."
-        ),
+        help=("Existing LoRA checkpoint to continue training from. If omitted, a new LoRA adapter is created."),
     )
     return parser.parse_args()
 
 
 def load_samples(path: Path) -> list[EpisodeTrainingSample]:
-    rows = [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
     samples: list[EpisodeTrainingSample] = []
 
@@ -99,17 +92,12 @@ def load_samples(path: Path) -> list[EpisodeTrainingSample]:
         samples.append(sample)
 
     if len(samples) < 2:
-        raise RuntimeError(
-            "Optimizer smoke requires at least two scored rollouts."
-        )
+        raise RuntimeError("Optimizer smoke requires at least two scored rollouts.")
 
     task_ids = {sample.task_id for sample in samples}
 
     if len(task_ids) != 1:
-        raise RuntimeError(
-            "All GRPO group members must come from the same task. "
-            f"Found: {sorted(task_ids)}"
-        )
+        raise RuntimeError(f"All GRPO group members must come from the same task. Found: {sorted(task_ids)}")
 
     return samples
 
@@ -122,23 +110,15 @@ def compute_advantages(
     reward_std = statistics.pstdev(rewards)
 
     if reward_std <= 0:
-        raise RuntimeError(
-            "Reward standard deviation is zero. "
-            "This group has no learning signal."
-        )
+        raise RuntimeError("Reward standard deviation is zero. This group has no learning signal.")
 
-    advantages = [
-        (reward - reward_mean) / (reward_std + 1.0e-6)
-        for reward in rewards
-    ]
+    advantages = [(reward - reward_mean) / (reward_std + 1.0e-6) for reward in rewards]
 
     if not all(math.isfinite(value) for value in advantages):
         raise RuntimeError("Advantages contain a non-finite value.")
 
     if advantages[rewards.index(min(rewards))] != min(advantages):
-        raise RuntimeError(
-            "The lowest reward did not receive the lowest advantage."
-        )
+        raise RuntimeError("The lowest reward did not receive the lowest advantage.")
 
     return advantages, reward_mean, reward_std
 
@@ -194,10 +174,7 @@ def current_generation_log_probs(
     temperature: float,
     device: torch.device,
 ) -> torch.Tensor:
-    full_token_ids = (
-        list(prompt_token_ids)
-        + list(generation_token_ids)
-    )
+    full_token_ids = list(prompt_token_ids) + list(generation_token_ids)
 
     input_ids = torch.tensor(
         [full_token_ids],
@@ -221,10 +198,7 @@ def current_generation_log_probs(
     ]
 
     if generation_logits.shape[0] != generation_length:
-        raise RuntimeError(
-            "Current-logprob extraction produced the wrong number "
-            "of generation positions."
-        )
+        raise RuntimeError("Current-logprob extraction produced the wrong number of generation positions.")
 
     generation_targets = input_ids[
         0,
@@ -278,10 +252,7 @@ def main() -> None:
             "reward": sample.reward,
             "advantage": advantage,
             "trainable_turns": len(sample.turns),
-            "trainable_tokens": sum(
-                len(turn.generation_token_ids)
-                for turn in sample.turns
-            ),
+            "trainable_tokens": sum(len(turn.generation_token_ids) for turn in sample.turns),
         }
         for index, (sample, advantage) in enumerate(
             zip(samples, advantages, strict=True),
@@ -301,15 +272,8 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    total_trainable_turns = sum(
-        len(sample.turns)
-        for sample in samples
-    )
-    total_trainable_tokens = sum(
-        len(turn.generation_token_ids)
-        for sample in samples
-        for turn in sample.turns
-    )
+    total_trainable_turns = sum(len(sample.turns) for sample in samples)
+    total_trainable_tokens = sum(len(turn.generation_token_ids) for sample in samples for turn in sample.turns)
 
     print("Rollouts:", len(samples))
     print("Rewards:", rewards)
@@ -357,10 +321,7 @@ def main() -> None:
 
     if args.adapter_checkpoint is not None:
         if not args.adapter_checkpoint.is_dir():
-            raise FileNotFoundError(
-                "Adapter checkpoint directory does not exist: "
-                f"{args.adapter_checkpoint}"
-            )
+            raise FileNotFoundError(f"Adapter checkpoint directory does not exist: {args.adapter_checkpoint}")
 
         print(
             "Loading trainable LoRA checkpoint:",
@@ -378,19 +339,12 @@ def main() -> None:
 
     model.train()
 
-    trainable_parameters = [
-        parameter
-        for parameter in model.parameters()
-        if parameter.requires_grad
-    ]
+    trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
 
     if not trainable_parameters:
         raise RuntimeError("LoRA created no trainable parameters.")
 
-    trainable_parameter_count = sum(
-        parameter.numel()
-        for parameter in trainable_parameters
-    )
+    trainable_parameter_count = sum(parameter.numel() for parameter in trainable_parameters)
 
     print("Trainable LoRA parameters:", trainable_parameter_count)
     print(
@@ -442,9 +396,7 @@ def main() -> None:
 
             if current_log_probs.shape != old_log_probs.shape:
                 raise RuntimeError(
-                    f"Rollout {rollout_index}, output "
-                    f"{turn.output_index}: current/old logprob "
-                    "shapes do not match."
+                    f"Rollout {rollout_index}, output {turn.output_index}: current/old logprob shapes do not match."
                 )
 
             if not torch.isfinite(current_log_probs).all():
@@ -457,9 +409,7 @@ def main() -> None:
 
             # Protect the smoke run from overflow while preserving the
             # PPO/GRPO clipping calculation.
-            ratio = torch.exp(
-                torch.clamp(log_ratio, min=-20.0, max=20.0)
-            )
+            ratio = torch.exp(torch.clamp(log_ratio, min=-20.0, max=20.0))
 
             clipped_ratio = torch.clamp(
                 ratio,
@@ -486,15 +436,9 @@ def main() -> None:
 
             total_loss_value += float(turn_loss.detach().cpu().item())
 
-            ratio_values.extend(
-                ratio.detach().float().cpu().tolist()
-            )
-            current_logprob_values.extend(
-                current_log_probs.detach().float().cpu().tolist()
-            )
-            old_logprob_values.extend(
-                old_log_probs.detach().float().cpu().tolist()
-            )
+            ratio_values.extend(ratio.detach().float().cpu().tolist())
+            current_logprob_values.extend(current_log_probs.detach().float().cpu().tolist())
+            old_logprob_values.extend(old_log_probs.detach().float().cpu().tolist())
 
             del current_log_probs
             del old_log_probs
@@ -512,9 +456,7 @@ def main() -> None:
         if not torch.isfinite(parameter.grad).all():
             raise RuntimeError("A LoRA gradient is non-finite.")
 
-        raw_gradient_norm += float(
-            parameter.grad.detach().float().square().sum().item()
-        )
+        raw_gradient_norm += float(parameter.grad.detach().float().square().sum().item())
 
     raw_gradient_norm = math.sqrt(raw_gradient_norm)
 
@@ -545,14 +487,10 @@ def main() -> None:
     )
 
     if changed_parameters <= 0:
-        raise RuntimeError(
-            "optimizer.step() completed but no LoRA parameter changed."
-        )
+        raise RuntimeError("optimizer.step() completed but no LoRA parameter changed.")
 
     if delta_l2 <= 0:
-        raise RuntimeError(
-            "LoRA parameter delta is zero after optimizer.step()."
-        )
+        raise RuntimeError("LoRA parameter delta is zero after optimizer.step().")
 
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(checkpoint_dir)
@@ -584,18 +522,12 @@ def main() -> None:
         "loss_is_finite": math.isfinite(total_loss_value),
         "raw_gradient_norm": raw_gradient_norm,
         "clipped_gradient_norm": clipped_gradient_norm_value,
-        "gradient_norm_is_finite": math.isfinite(
-            clipped_gradient_norm_value
-        ),
+        "gradient_norm_is_finite": math.isfinite(clipped_gradient_norm_value),
         "ratio_mean": statistics.fmean(ratio_values),
         "ratio_min": min(ratio_values),
         "ratio_max": max(ratio_values),
-        "old_logprob_mean": statistics.fmean(
-            old_logprob_values
-        ),
-        "current_logprob_mean": statistics.fmean(
-            current_logprob_values
-        ),
+        "old_logprob_mean": statistics.fmean(old_logprob_values),
+        "current_logprob_mean": statistics.fmean(current_logprob_values),
         "changed_lora_parameters": changed_parameters,
         "parameter_delta_l2": delta_l2,
         "max_absolute_parameter_delta": max_absolute_delta,
@@ -645,23 +577,13 @@ def main() -> None:
 
     reloaded_adapter = adapter_parameter_snapshot(reloaded_model)
 
-    common_names = sorted(
-        set(saved_adapter) & set(reloaded_adapter)
-    )
+    common_names = sorted(set(saved_adapter) & set(reloaded_adapter))
 
     if not common_names:
-        raise RuntimeError(
-            "No common LoRA parameter names were found after reload."
-        )
+        raise RuntimeError("No common LoRA parameter names were found after reload.")
 
     reload_max_difference = max(
-        float(
-            (
-                saved_adapter[name]
-                - reloaded_adapter[name]
-            ).abs().max().item()
-        )
-        for name in common_names
+        float((saved_adapter[name] - reloaded_adapter[name]).abs().max().item()) for name in common_names
     )
 
     if reload_max_difference != 0.0:

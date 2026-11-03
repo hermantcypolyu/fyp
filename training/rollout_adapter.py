@@ -41,40 +41,28 @@ class EpisodeTrainingSample:
 
 def _require_int_tokens(value: Any, *, field: str, output_index: int) -> tuple[int, ...]:
     if not isinstance(value, list) or not value:
-        raise InvalidRolloutError(
-            f"output[{output_index}].{field} must be a non-empty list"
-        )
+        raise InvalidRolloutError(f"output[{output_index}].{field} must be a non-empty list")
 
     if any(isinstance(token, bool) or not isinstance(token, int) for token in value):
-        raise InvalidRolloutError(
-            f"output[{output_index}].{field} must contain only integer token IDs"
-        )
+        raise InvalidRolloutError(f"output[{output_index}].{field} must contain only integer token IDs")
 
     return tuple(value)
 
 
 def _require_log_probs(value: Any, *, output_index: int) -> tuple[float, ...]:
     if not isinstance(value, list) or not value:
-        raise InvalidRolloutError(
-            f"output[{output_index}].generation_log_probs must be a non-empty list"
-        )
+        raise InvalidRolloutError(f"output[{output_index}].generation_log_probs must be a non-empty list")
 
     converted: list[float] = []
 
     for log_prob in value:
         if isinstance(log_prob, bool) or not isinstance(log_prob, (int, float)):
-            raise InvalidRolloutError(
-                f"output[{output_index}].generation_log_probs "
-                "must contain only numbers"
-            )
+            raise InvalidRolloutError(f"output[{output_index}].generation_log_probs must contain only numbers")
 
         converted_log_prob = float(log_prob)
 
         if not math.isfinite(converted_log_prob):
-            raise InvalidRolloutError(
-                f"output[{output_index}].generation_log_probs "
-                "contains a non-finite value"
-            )
+            raise InvalidRolloutError(f"output[{output_index}].generation_log_probs contains a non-finite value")
 
         converted.append(converted_log_prob)
 
@@ -128,9 +116,7 @@ def adapt_rollout(row: dict[str, Any]) -> EpisodeTrainingSample | None:
 
     for output_index, item in enumerate(output):
         if not isinstance(item, dict):
-            raise InvalidRolloutError(
-                f"output[{output_index}] must be a dictionary"
-            )
+            raise InvalidRolloutError(f"output[{output_index}] must be a dictionary")
 
         generation_ids = item.get("generation_token_ids")
 
@@ -163,15 +149,11 @@ def adapt_rollout(row: dict[str, Any]) -> EpisodeTrainingSample | None:
 
         action_type = item.get("type")
         if not isinstance(action_type, str) or not action_type:
-            raise InvalidRolloutError(
-                f"output[{output_index}].type must be a non-empty string"
-            )
+            raise InvalidRolloutError(f"output[{output_index}].type must be a non-empty string")
 
         action_name = item.get("name")
         if action_name is not None and not isinstance(action_name, str):
-            raise InvalidRolloutError(
-                f"output[{output_index}].name must be a string or null"
-            )
+            raise InvalidRolloutError(f"output[{output_index}].name must be a string or null")
 
         turns.append(
             TrainableTurn(

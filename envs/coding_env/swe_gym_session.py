@@ -18,7 +18,6 @@ from envs.coding_env.verifier import (
 )
 from rewards.compose import compose_reward
 
-
 CandidateVerifier = Callable[..., dict[str, Any]]
 
 
@@ -42,10 +41,7 @@ class SWEGymEpisodeSession:
     @property
     def done(self) -> bool:
         box = self.sandbox.toolbox
-        return (
-            box.submitted
-            or box.n_calls >= box.max_tool_calls
-        )
+        return box.submitted or box.n_calls >= box.max_tool_calls
 
     def tool(
         self,
@@ -57,9 +53,7 @@ class SWEGymEpisodeSession:
         if self._result is not None:
             return {
                 "ok": False,
-                "output": (
-                    "Error: this episode is already graded."
-                ),
+                "output": ("Error: this episode is already graded."),
                 "done": True,
             }
 
@@ -83,12 +77,8 @@ class SWEGymEpisodeSession:
         box = self.sandbox.toolbox
         candidate_patch = self.sandbox.export_patch()
 
-        with tempfile.TemporaryDirectory(
-            prefix="swegym_candidate_"
-        ) as temporary:
-            candidate_path = (
-                Path(temporary) / "candidate.patch"
-            )
+        with tempfile.TemporaryDirectory(prefix="swegym_candidate_") as temporary:
+            candidate_path = Path(temporary) / "candidate.patch"
 
             candidate_path.write_text(
                 candidate_patch,
@@ -100,24 +90,16 @@ class SWEGymEpisodeSession:
                 candidate_patch_path=candidate_path,
             )
 
-        passed = int(
-            candidate.get("tests_passed", 0)
-        )
-        collected = int(
-            candidate.get("tests_total", 0)
-        )
-        floor_tests = int(
-            candidate.get("floor_tests", 0)
-        )
+        passed = int(candidate.get("tests_passed", 0))
+        collected = int(candidate.get("tests_total", 0))
+        floor_tests = int(candidate.get("floor_tests", 0))
 
         gates = set(box.gates)
 
         if not box.submitted:
             gates.add(GATE_NO_SUBMIT)
 
-        validation_status = candidate.get(
-            "validation_status"
-        )
+        validation_status = candidate.get("validation_status")
 
         if validation_status != "candidate_valid":
             gates.add("candidate_verification_failed")
@@ -141,13 +123,8 @@ class SWEGymEpisodeSession:
             # produce positive or neutral credit.
             reward = -1.0
 
-            if (
-                "candidate_verification_failed"
-                not in ordered_gates
-            ):
-                ordered_gates.append(
-                    "candidate_verification_failed"
-                )
+            if "candidate_verification_failed" not in ordered_gates:
+                ordered_gates.append("candidate_verification_failed")
                 ordered_gates.sort()
 
         per_test = _candidate_per_test(candidate)
@@ -195,11 +172,7 @@ def _candidate_per_test(
         tests = group.get("tests") or []
         exit_code = group.get("exit_code")
 
-        status = (
-            "passed"
-            if exit_code == 0
-            else "failed"
-        )
+        status = "passed" if exit_code == 0 else "failed"
 
         for test in tests:
             results[str(test)] = status

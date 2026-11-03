@@ -84,17 +84,9 @@ class CodingAgent(SimpleAgent):
         body: NeMoGymResponseCreateParamsNonStreaming = Body(),
     ) -> NeMoGymResponse:
         cap = _max_turns(body) or self.config.max_steps
-        scoped = self.model_copy(
-            update={
-                "config": self.config.model_copy(
-                    update={"max_steps": cap}
-                )
-            }
-        )
+        scoped = self.model_copy(update={"config": self.config.model_copy(update={"max_steps": cap})})
         ...
-        return await SimpleAgent.responses(
-            scoped, request, response, model_body
-        )
+        return await SimpleAgent.responses(scoped, request, response, model_body)
 ```
 
 **Brief explanation:** `CodingAgent` reuses NeMo Gym's `SimpleAgent`. This project-specific
@@ -161,6 +153,7 @@ def tool(self, name, arguments=None):
         "output": result.output,
         "done": self.done,
     }
+
 
 def grade(self) -> VerifyResult:
     if self._result is None:
@@ -277,10 +270,7 @@ reward_std = statistics.pstdev(rewards)
 if reward_std <= 0:
     raise RuntimeError("Reward standard deviation is zero.")
 
-advantages = [
-    (reward - reward_mean) / (reward_std + 1.0e-6)
-    for reward in rewards
-]
+advantages = [(reward - reward_mean) / (reward_std + 1.0e-6) for reward in rewards]
 ```
 
 The normalized group-relative advantage is:
@@ -307,9 +297,7 @@ lines 524–559.
 
 ```python
 log_ratio = current_log_probs - old_log_probs
-ratio = torch.exp(
-    torch.clamp(log_ratio, min=-20.0, max=20.0)
-)
+ratio = torch.exp(torch.clamp(log_ratio, min=-20.0, max=20.0))
 clipped_ratio = torch.clamp(
     ratio,
     1.0 - args.clip_epsilon,

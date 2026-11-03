@@ -19,16 +19,9 @@ from typing import Any
 
 from envs.coding_env.tools import Toolbox
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-DEFAULT_AGENT_MANIFEST = (
-    PROJECT_ROOT
-    / "results"
-    / "analysis"
-    / "swe_gym_lite"
-    / "pilot_5_agent_manifest.json"
-)
+DEFAULT_AGENT_MANIFEST = PROJECT_ROOT / "results" / "analysis" / "swe_gym_lite" / "pilot_5_agent_manifest.json"
 
 
 class DockerSandboxError(RuntimeError):
@@ -60,17 +53,11 @@ class DockerSandbox:
         cls,
         task: DockerTask,
         parent: Path | None = None,
-    ) -> "DockerSandbox":
+    ) -> DockerSandbox:
         owns_dir = parent is None
 
         base = (
-            Path(parent)
-            if parent is not None
-            else Path(
-                tempfile.mkdtemp(
-                    prefix=f"swegym_{task.instance_id}_"
-                )
-            )
+            Path(parent) if parent is not None else Path(tempfile.mkdtemp(prefix=f"swegym_{task.instance_id}_"))
         ).resolve()
 
         if base.exists() and owns_dir is False:
@@ -81,10 +68,7 @@ class DockerSandbox:
         repo_dir = root / "repo"
         root.mkdir()
 
-        container_name = (
-            "hermanyeung-swegym-materialise-"
-            + task.instance_id.replace("/", "-")
-        )
+        container_name = "hermanyeung-swegym-materialise-" + task.instance_id.replace("/", "-")
 
         try:
             _run(
@@ -145,10 +129,7 @@ class DockerSandbox:
             )
 
         if not repo_dir.is_dir():
-            raise DockerSandboxError(
-                f"{task.instance_id}: Docker image did not "
-                "materialise /testbed."
-            )
+            raise DockerSandboxError(f"{task.instance_id}: Docker image did not materialise /testbed.")
 
         actual_commit = _git(
             repo_dir,
@@ -158,8 +139,7 @@ class DockerSandbox:
 
         if actual_commit != task.base_commit:
             raise DockerSandboxError(
-                f"{task.instance_id}: expected base commit "
-                f"{task.base_commit}, got {actual_commit}."
+                f"{task.instance_id}: expected base commit {task.base_commit}, got {actual_commit}."
             )
 
         # Some official instance images contain tracked setup-time
@@ -195,17 +175,10 @@ class DockerSandbox:
             ".swegym_gold.patch",
         }
 
-        leaked = [
-            path
-            for path in repo_dir.rglob("*")
-            if path.name in forbidden_names
-        ]
+        leaked = [path for path in repo_dir.rglob("*") if path.name in forbidden_names]
 
         if leaked:
-            raise DockerSandboxError(
-                f"{task.instance_id}: verifier-only files "
-                "leaked into the agent workspace."
-            )
+            raise DockerSandboxError(f"{task.instance_id}: verifier-only files leaked into the agent workspace.")
 
         toolbox = Toolbox(
             root=root,
@@ -255,7 +228,7 @@ class DockerSandbox:
                 ignore_errors=True,
             )
 
-    def __enter__(self) -> "DockerSandbox":
+    def __enter__(self) -> DockerSandbox:
         return self
 
     def __exit__(self, *_exc: Any) -> None:
@@ -265,11 +238,7 @@ class DockerSandbox:
 def load_docker_tasks(
     manifest_path: Path = DEFAULT_AGENT_MANIFEST,
 ) -> dict[str, DockerTask]:
-    rows = json.loads(
-        Path(manifest_path).read_text(
-            encoding="utf-8"
-        )
-    )
+    rows = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
 
     tasks = {}
 
@@ -283,9 +252,7 @@ def load_docker_tasks(
         )
 
         if task.instance_id in tasks:
-            raise DockerSandboxError(
-                f"duplicate instance: {task.instance_id}"
-            )
+            raise DockerSandboxError(f"duplicate instance: {task.instance_id}")
 
         tasks[task.instance_id] = task
 
@@ -312,8 +279,7 @@ def _git(repo_dir: Path, *arguments: str) -> str:
         ],
         check=True,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
 
     return result.stdout
@@ -329,14 +295,6 @@ def _run(
         command,
         check=check,
         text=True,
-        stdout=(
-            subprocess.DEVNULL
-            if quiet
-            else None
-        ),
-        stderr=(
-            subprocess.DEVNULL
-            if quiet
-            else None
-        ),
+        stdout=(subprocess.DEVNULL if quiet else None),
+        stderr=(subprocess.DEVNULL if quiet else None),
     )

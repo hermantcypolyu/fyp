@@ -32,13 +32,8 @@ Verified by a real command, with output stored under `results/` or reproduced by
   dataset and **not** evidence of improvement.
 
 Measured facts at the last full verification: **303 unit tests passed, 0 skipped**, **36/36** tasks
-solvable by gold and failable without it, held-out seal `318fedc8868b` intact.
-
-**Lint is not currently clean.** `uv run ruff check .` reports **12 errors** and
-`ruff format --check` would reformat **16 files**, so `make check` exits non-zero. All 12 errors
-predate the current work and sit in files unrelated to the reward and trajectory roadmaps
-(`docker_sandbox.py`, `session.py`, `swe_gym_session.py`, three test modules, and three scripts).
-This is recorded as a known defect rather than silently reformatted; see open item below.
+solvable by gold and failable without it, held-out seal `318fedc8868b` intact, and
+`make check` (seal, validate, verify-gold, test, lint) exiting **0** with 0 ruff findings.
 
 ---
 
@@ -245,9 +240,8 @@ The research question is stated verbatim in `README.md` §"Research question" an
 model progression in its closing section. The scope rules above (harness fixed, Hermes optional,
 7B optional, A100 not required, unverified names excluded) are enumerated in §4 of this document.
 
-**Open defect carried forward:** `make check` fails on lint (12 ruff errors, 16 files needing
-format). Fix with `make fmt` plus a manual pass over the non-fixable `UP022`, `B904` and `B905`
-findings, or scope lint to changed files. Do this before any release claim that CI is green.
+**Open defect carried forward:** none blocking. `make check` is green as of the lint repair
+commit. Keep it green: run `make check` before any claim that verification passed.
 
 ---
 
