@@ -531,60 +531,97 @@ episode.
 
 ### Phase 4 — GRPO implementation audit
 
+> **Audited 2026-11-04.** Findings and evidence: `docs/PHASE4_GRPO_AUDIT.md`.
+> Verdict: **15 of 20 §4.2 items verified, 1 satisfied by construction, 2 absent
+> (reference-policy KL and everything that depends on it), 2 not applicable.**
+> The code is a one-step, clipped, group-relative policy-gradient update with LoRA —
+> *GRPO-style*, not full GRPO.
+
 **4.1 Locate the training files**
 
-- [ ] Rollout adapter
-- [ ] Reward-to-advantage code
-- [ ] Policy loss
-- [ ] Optimizer step
-- [ ] Checkpoint save/reload
-- [ ] LoRA config
-- [ ] Training tests
+- [X] Rollout adapter — `training/rollout_adapter.py` (12 tests)
+- [X] Reward-to-advantage code — `training/grpo_math.py::group_advantages`
+- [X] Policy loss — `training/grpo_math.py::policy_loss`, mirrored in the torch loop
+- [X] Optimizer step — `scripts/run_optimizer_smoke.py:477`
+- [X] Checkpoint save/reload — `scripts/run_optimizer_smoke.py:492`
+- [X] LoRA config — `scripts/run_optimizer_smoke.py:301` and `configs/training/*.yaml`
+- [X] Training tests — `training/tests/` (39 tests, all torch-free)
 
 **4.2 Verify the GRPO core**
 
-- [ ] Multiple rollouts per task
-- [ ] Independent reward per rollout
-- [ ] Group mean computed
-- [ ] Group-relative advantage computed
-- [ ] Zero-variance groups handled
-- [ ] Generated-token log probabilities obtained
-- [ ] Prompt tokens masked
-- [ ] Padding tokens masked
-- [ ] Old-policy probability (or reference) available
-- [ ] Policy probability ratio computed
-- [ ] Clipped policy objective present
-- [ ] Reference-policy KL regularisation present
-- [ ] KL direction correct
-- [ ] Loss applied only to generated tokens
-- [ ] Backward produces finite gradients
-- [ ] Gradient clipping sane
-- [ ] AdamW updates only LoRA parameters
-- [ ] Base model parameters frozen
-- [ ] Parameters actually change after the step
-- [ ] Checkpoint reload restores identical parameters
+- [X] Multiple rollouts per task — `load_samples` enforces one `task_id`; run used 8
+- [X] Independent reward per rollout — `_require_reward` rejects non-finite
+- [X] Group mean computed — reproduced the recorded `-0.125` exactly
+- [X] Group-relative advantage computed — `(r - mean) / (std + eps)`, bit-identical
+- [X] Zero-variance groups handled — `DegenerateGroupError`, never a silent zero
+- [X] Generated-token log probabilities obtained
+- [X] Prompt tokens masked — logits sliced from `prompt_length - 1`
+- [X] Padding tokens masked — **by construction**: turns are scored unpadded, one
+  sequence each; no batched path exists to pad
+- [X] Old-policy probability (or reference) available — `generation_log_probs`
+- [X] Policy probability ratio computed — `policy_ratio`
+- [X] Clipped policy objective present — one-sided `min(r*A, clip(r)*A)`, as PPO specifies
+- [ ] **Reference-policy KL regularisation present — ABSENT.** No reference model is
+  loaded; `grep -n "kl\|ref_model"` over the script returns nothing. Deferred because a
+  frozen 1.5B copy does not fit: the run already peaked at 19.9-22.9 GB of 24 GB.
+  `test_there_is_no_kl_term_to_test` pins the absence so this cannot be ticked silently.
+- [ ] **KL direction correct — not applicable**, since no KL term exists.
+- [X] Loss applied only to generated tokens
+- [X] Backward produces finite gradients — recorded norm 0.307842467
+- [X] Gradient clipping sane — `max_norm=1.0`, did not bind (0.3078)
+- [X] AdamW updates only LoRA parameters — 18,464,768 of a 1.5B model
+- [X] Base model parameters frozen — ⚠️ evidenced by the recorded run, **not** a CI test
+- [X] Parameters actually change after the step — 392 LoRA tensors, delta L2 0.038865 ⚠️
+- [X] Checkpoint reload restores identical parameters — `reload_max_parameter_difference: 0.0` ⚠️
+
+> ⚠️ marks items that need torch + CUDA to test and are therefore evidenced only by a
+> recorded run, not by a CI test. Do not upgrade these to a stronger claim.
 
 **4.3 Fixed naming**
 
-- [ ] "GRPO with LoRA" only if the full GRPO objective is verified
-- [ ] Otherwise "Controlled GRPO-style LoRA update"
-- [ ] README, report, and slides use the same name
-- [ ] A smoke test is never described as full training
-- [ ] A parameter change is never described as performance improvement
+- [X] "GRPO with LoRA" only if the full GRPO objective is verified — it is **not**
+  verified (no KL), so this name must not be used
+- [X] Otherwise "Controlled GRPO-style LoRA update" — this is the name in use in
+  `README.md`, `docs/PHASE_F4_CONTROLLED_UPDATE.md`, `docs/PHASE_F3_OPTIMIZER_SMOKE.md`,
+  `docs/TRAINING_READINESS.md` and `PROGRESS.md`. No rename was needed.
+- [X] README, report, and slides use the same name — a repository-wide grep finds no
+  competing claim
+- [X] A smoke test is never described as full training — `README.md:13` states the update
+  "verifies optimizer and checkpoint plumbing only"
+- [X] A parameter change is never described as performance improvement —
+  `README.md:13` and `PHASE_F4_CONTROLLED_UPDATE.md` §"Interpretation and limitations"
+  both say it does **not** show improved coding performance
 
-**4.4 New GRPO tests**
+**4.4 New GRPO tests** — `training/tests/test_grpo_math.py` (27 tests, torch-free)
 
-- [ ] Equal rewards → advantage near zero
-- [ ] High-reward rollout → positive advantage
-- [ ] Low-reward rollout → negative advantage
-- [ ] Clipping actually bounds the ratio
-- [ ] Rising KL is reflected in the loss
-- [ ] Prompt tokens excluded from policy loss
-- [ ] Padding tokens excluded from policy loss
-- [ ] Frozen base weights unchanged
-- [ ] LoRA weights changed
-- [ ] Loss, gradient, KL all finite
-- [ ] Empty / invalid rollout safely rejected
+- [X] Equal rewards → advantage near zero — **rejected instead**, deliberately:
+  `test_equal_rewards_are_rejected_rather_than_scored_as_zero_advantage`. A zero-variance
+  group is `0/0`; returning `0.0` would look like a successful step with no gradient.
+- [X] High-reward rollout → positive advantage — `test_high_reward_rollout_gets_positive_advantage`
+- [X] Low-reward rollout → negative advantage — `test_low_reward_rollout_gets_negative_advantage`,
+  `test_the_lowest_reward_always_gets_the_lowest_advantage`
+- [X] Clipping actually bounds the ratio — `test_clipping_limits_the_reward_for_improving_too_far`,
+  `test_clipping_does_not_apply_to_the_disadvantageous_direction`,
+  `test_inside_the_trust_region_the_objective_is_not_clipped`
+- [ ] **Rising KL is reflected in the loss — cannot be tested; no KL term exists.**
+  `test_there_is_no_kl_term_to_test` pins the gap with `inspect.signature`.
+- [X] Prompt tokens excluded from policy loss — `test_loss_is_normalised_by_the_group_token_count_not_the_turn_count`
+- [ ] **Padding tokens excluded from policy loss — not applicable.** Each turn is scored as
+  one unpadded sequence of `len(prompt) + len(generation)`; there is no batched path.
+- [ ] Frozen base weights unchanged — ⚠️ needs a GPU; evidenced by the recorded run's
+  `trainable_parameter_count`, not by a CI test
+- [ ] LoRA weights changed — ⚠️ needs a GPU; `parameter_delta` is torch-bound
+- [X] Loss, gradient, KL all finite — `test_loss_is_finite_for_every_extreme_ratio_and_advantage`,
+  `test_policy_ratio_output_is_always_finite` (loss and ratio finite; KL absent)
+- [X] Empty / invalid rollout safely rejected — `test_mismatched_lengths_are_rejected`,
+  `test_non_finite_log_probabilities_are_rejected`,
+  `test_zero_token_count_is_rejected_rather_than_dividing_by_zero`,
+  `test_empty_inputs_are_handled_without_a_divide_by_zero`, plus the 12 adapter tests
+
+**Anchor test.** `test_reproduces_the_recorded_smoke_run_exactly` replays the rewards from
+an executed RTX A6000 run and asserts the mean, standard deviation and both advantage values
+to the last decimal. That is the evidence that extracting the math into `training/grpo_math.py`
+did not change it.
 
 ---
 

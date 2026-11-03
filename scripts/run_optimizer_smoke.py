@@ -24,6 +24,7 @@ from peft import LoraConfig, PeftModel, get_peft_model
 from torch.nn.utils import clip_grad_norm_
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from training.grpo_math import DegenerateGroupError, group_advantages
 from training.rollout_adapter import EpisodeTrainingSample, adapt_rollout
 
 
@@ -105,22 +106,17 @@ def load_samples(path: Path) -> list[EpisodeTrainingSample]:
 def compute_advantages(
     samples: list[EpisodeTrainingSample],
 ) -> tuple[list[float], float, float]:
+    """Group statistics for one GRPO group.
+
+    Delegates to `training.grpo_math`, which is torch-free and unit-tested. The
+    degenerate-group check used to live here, where no test could reach it.
+    """
     rewards = [sample.reward for sample in samples]
-    reward_mean = statistics.fmean(rewards)
-    reward_std = statistics.pstdev(rewards)
 
-    if reward_std <= 0:
-        raise RuntimeError("Reward standard deviation is zero. This group has no learning signal.")
-
-    advantages = [(reward - reward_mean) / (reward_std + 1.0e-6) for reward in rewards]
-
-    if not all(math.isfinite(value) for value in advantages):
-        raise RuntimeError("Advantages contain a non-finite value.")
-
-    if advantages[rewards.index(min(rewards))] != min(advantages):
-        raise RuntimeError("The lowest reward did not receive the lowest advantage.")
-
-    return advantages, reward_mean, reward_std
+    try:
+        return group_advantages(rewards)
+    except DegenerateGroupError as error:
+        raise RuntimeError(str(error)) from error
 
 
 def trainable_parameter_snapshot(
@@ -408,7 +404,8 @@ def main() -> None:
             log_ratio = current_log_probs - old_log_probs
 
             # Protect the smoke run from overflow while preserving the
-            # PPO/GRPO clipping calculation.
+            # PPO/GRPO clipping calculation. The clamp and objective live in
+            # training/grpo_math.py so they can be tested without a GPU.
             ratio = torch.exp(torch.clamp(log_ratio, min=-20.0, max=20.0))
 
             clipped_ratio = torch.clamp(
