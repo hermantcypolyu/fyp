@@ -68,6 +68,49 @@ benchmark/tasks/train/<task_id>/
 └── solution/
 ```
 
+## 1.5 Trajectory, rollout, and episode
+
+**File:** [`analysis/trace.py`](../../analysis/trace.py), [`analysis/trace_schema.json`](../../analysis/trace_schema.json)
+
+**Definition.** A *trajectory* is the complete ordered sequence of model observations,
+decisions, tool calls, environment responses, and verification outcomes, from task
+initialisation until submission, timeout, or termination.
+
+Three words are used precisely and are not interchangeable:
+
+| Term | Meaning | Cardinality |
+|---|---|---|
+| **Episode** | One materialised sandbox plus one task, from `EpisodeSession.open()` to `close()` | 1 sandbox |
+| **Rollout** | One sampling pass of the policy through one episode | 1 `rollout_id` |
+| **Trajectory** | The recorded sequence of everything observed, decided and received in that rollout | 1 row of `rollouts.jsonl` |
+
+**Say:** “The episode is the environment, the rollout is the process, and the trajectory is
+the record. One row of the JSONL is one trajectory, and it is a complete record of one rollout
+inside one episode.”
+
+**Why it matters for GRPO:** `k` rollouts of one prompt are `k` trajectories that share
+`task_id` and `run_id` and differ in `rollout_id`. That triple is the group key, and the
+group's reward variance is what the gradient is built from. If the terms are conflated, a
+group of identical or crashed rollouts looks like a valid group with zero variance.
+
+**Valid termination reasons**, recorded in `termination_reason`:
+
+| Value | Meaning |
+|---|---|
+| `submitted` | the agent called `submit()` |
+| `max_turns` | the turn budget ran out without a submission |
+| `max_tool_calls` | the tool-call budget ran out without a submission |
+| `timeout` | the wall clock or a per-tool timeout ended the rollout |
+| `error` | the harness raised; the trajectory is still persisted, with the error class named |
+
+`termination_reason` is the **cause**; `result.gates` is the **consequence**. `max_turns` and
+`max_tool_calls` both fire the same `no_submit` gate, so only the termination reason tells
+them apart.
+
+**Say:** “A trajectory that crashed is still a trajectory. We used to lose exactly those rows,
+and a group of crashes then averaged to 0.0 with zero variance — which looks the same as
+running fine and achieving nothing.”
+
 ## 2. Agent harness
 
 **File:** [`envs/coding_env/agent.py`](../../envs/coding_env/agent.py), `CodingAgent.responses()`

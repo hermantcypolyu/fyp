@@ -96,6 +96,46 @@ The current custom coding-agent harness is the main experiment.
 - Unverified names (e.g. "OpenHands" / "OpenClaw") must not appear in report conclusions until
   confirmed.
 
+### 4.4 Trajectory definition (fixed)
+
+> **A trajectory is the complete ordered sequence of model observations, decisions, tool calls,
+> environment responses, and verification outcomes, from task initialisation until submission,
+> timeout, or termination.**
+
+The three terms below are used with these meanings throughout the code, the schema, and the
+report. They are not interchangeable, and the distinction is load-bearing for GRPO.
+
+| Term | Definition | Cardinality |
+|---|---|---|
+| **Episode** | One materialised sandbox plus one task, from `EpisodeSession.open()` to `close()`. Owns the working tree, the tool log and the grade. | 1 sandbox |
+| **Rollout** | One sampling pass of the policy through one episode, ending in a submission, an exhausted budget, or an error. | 1 episode, 1 `rollout_id` |
+| **Trajectory** | The recorded sequence of everything the agent observed, decided and received within one rollout: the ordered steps, their tool calls and results, the candidate patch, the verification summary and the reward. | 1 row of `rollouts.jsonl` |
+
+A trajectory is the **artifact**, a rollout is the **process** that produced it, and an episode is
+the **environment** the process ran in. One row of `rollouts.jsonl` is one trajectory, and it is a
+complete record of one rollout that happened inside one episode.
+
+**Why the distinction matters.** GRPO samples $k$ rollouts of one prompt. Those $k$ rollouts are
+$k$ trajectories sharing a `task_id` and a `run_id` but differing in `rollout_id` — that triple is
+the GRPO group key, and the group's reward variance is exactly what the gradient is built from.
+Conflating the terms is what allowed a group of identical or crashed rollouts to be reported as a
+valid group with zero variance.
+
+**Valid termination reasons.** Every trajectory ends for exactly one reason, recorded in
+`termination_reason`:
+
+| Value | Meaning |
+|---|---|
+| `submitted` | The agent called `submit()`; verification ran against the submitted tree. |
+| `max_turns` | The turn budget was exhausted without a submission. |
+| `max_tool_calls` | The tool-call budget was exhausted without a submission. |
+| `timeout` | The wall clock or a per-tool timeout ended the rollout. |
+| `error` | The harness raised. The trajectory is **still persisted**, with the error class named. |
+
+`termination_reason` records the **cause**; `result.gates` records the **consequence**. They are
+not redundant: `max_turns` and `max_tool_calls` both fire the same `no_submit` gate, and only the
+termination reason distinguishes them.
+
 ---
 
 ## 5. Priority ordering
@@ -253,11 +293,11 @@ commit. Keep it green: run `make check` before any claim that verification passe
 > environment responses, and verification outcomes from task initialisation until submission,
 > timeout, or termination.
 
-- [ ] Add the definition to the methodology
-- [ ] Add it to the code walkthrough
-- [ ] Add it to the presentation script
-- [ ] Separate the terms **trajectory**, **rollout**, and **episode** explicitly
-- [ ] Define the valid termination reasons
+- [x] Add the definition to the methodology (§4.4 above)
+- [x] Add it to the code walkthrough (`docs/demo/code_walkthrough.md`)
+- [x] Add it to the presentation script (`docs/demo/cantonese_presentation_script.md`)
+- [x] Separate the terms **trajectory**, **rollout**, and **episode** explicitly (§4.4)
+- [x] Define the valid termination reasons (§4.4; enum in `analysis/trace_schema.json`)
 
 **2.2 Trajectory schema**
 
@@ -273,24 +313,24 @@ Every step must record:
 `step_id`, `timestamp`, observation summary, model action, tool name, tool arguments, tool result
 summary, success/error, duration, token count.
 
-- [ ] Audit the existing JSONL fields against the list above
-- [ ] Identify missing fields
-- [ ] Update the schema
-- [ ] Add schema validation
-- [ ] Add unit tests
-- [ ] Guarantee a unique ID per trajectory
-- [ ] Guarantee failed trajectories are also persisted
+- [x] Audit the existing JSONL fields against the list above (`docs/trajectory_schema_audit.md`; 9 present, 3 partial, 8 missing)
+- [x] Identify missing fields (same document, gap register G1–G8)
+- [x] Update the schema (`analysis/trace_schema.json` bumped to v3; v2 frozen at `analysis/trace_schema_v2.json`)
+- [x] Add schema validation (validate-on-write, dispatched by the row's own `schema_version`)
+- [x] Add unit tests (`analysis/tests/test_trajectory_phase2.py`, 18 tests)
+- [x] Guarantee a unique ID per trajectory (`run_id` + `task.id` + `rollout_id`; `agent.checkpoint_id`/`random_seed`/`prompt_config_version` complete the identity)
+- [x] Guarantee failed trajectories are also persisted (`build_row(result=None, error=...)` writes a valid `termination_reason: "error"` row)
 
 **2.3 Prevent private-data leakage**
 
 The agent must never see: hidden test contents, the gold patch, the reference solution, private
 verifier internals, `FAIL_TO_PASS` answers, or `PASS_TO_PASS` answers.
 
-- [ ] Agent-visible JSON separated from private verification JSON
-- [ ] Trajectory records only a hidden-test summary
-- [ ] Hidden-test error detail is never returned to the model
-- [ ] Dashboard and logs cannot accidentally expose the gold patch
-- [ ] A leakage regression test exists
+- [x] Agent-visible JSON separated from private verification JSON (`rollouts.jsonl` vs `rollouts_private.jsonl`, joined on `(run_id, rollout_id)`)
+- [x] Trajectory records only a hidden-test summary (`hidden_tests` is counts only: declared / passed / floor / failed)
+- [x] Hidden-test error detail is never returned to the model (verifier truncates to a count; asserted by test)
+- [x] Dashboard and logs cannot accidentally expose the gold patch (the row carries no gold-patch path or content; only `candidate_patch`, which is the agent's own diff)
+- [x] A leakage regression test exists (`analysis/tests/test_trajectory_phase2.py`, the `2.3 leakage` block)
 
 ---
 

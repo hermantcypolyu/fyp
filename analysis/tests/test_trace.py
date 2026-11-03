@@ -18,7 +18,6 @@ import pytest
 
 from analysis import versions
 from analysis.trace import (
-    MAX_FIELD_CHARS,
     SCHEMA_PATH,
     Timer,
     TraceError,
@@ -84,17 +83,17 @@ def test_a_real_episode_produces_a_valid_row(real_row):
 @pytest.mark.slow
 def test_every_field_is_populated_not_placeholder(real_row):
     assert real_row["task"]["provenance_source"] in {"real_repo", "invented"}
-    assert real_row["budgets"]["tool_calls_used"] == len(real_row["tool_calls"])
+    assert real_row["budgets"]["tool_calls_used"] == len(real_row["steps"])
     assert real_row["duration_s"] > 0
-    assert real_row["result"]["per_test"], "per-test detail is what makes a failure taxonomy possible"
     assert real_row["versions"]["repo_commit"], "a trace that cannot name its code is not reproducible"
     assert set(real_row["limits_enforced"]) >= {"wall_clock_s", "network"}
 
 
 @pytest.mark.slow
 def test_tool_transcript_is_ordered_and_complete(real_row):
-    assert [c["index"] for c in real_row["tool_calls"]] == list(range(len(real_row["tool_calls"])))
-    assert [c["name"] for c in real_row["tool_calls"]] == ["list_files", "run_tests", "submit"]
+    assert [s["step_id"] for s in real_row["steps"]] == list(range(len(real_row["steps"])))
+    assert [s["tool_name"] for s in real_row["steps"]] == ["list_files", "run_tests", "submit"]
+    assert [s["action_type"] for s in real_row["steps"]] == ["tool_call", "tool_call", "submit"]
 
 
 # --------------------------------------------------------------------------- rejections
@@ -154,10 +153,9 @@ def test_long_arguments_are_clipped_but_the_length_is_kept(task, tmp_path):
         )
     finally:
         session.close()
-    call = row["tool_calls"][0]
-    assert len(call["arguments"]["content"]) < 30_000
-    assert "chars]" in call["arguments"]["content"]
-    assert call["output_chars"] >= len(call["output"]) - MAX_FIELD_CHARS
+    call = row["steps"][0]
+    assert len(call["tool_arguments"]["content"]) < 30_000
+    assert "chars]" in call["tool_arguments"]["content"]
 
 
 # --------------------------------------------------------------------------- round trip

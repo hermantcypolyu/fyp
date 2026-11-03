@@ -2,35 +2,47 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/rl-coding-agents/analysis/trace_schema.json",
   "title": "Rollout trace (one line of results/raw/<run_id>/rollouts.jsonl)",
-  "description": "One episode, start to reward. Written by analysis.trace.RolloutTrace; every field is populated by a real run - nothing here is hand-authored. The row is deliberately self-contained: task identity, budgets, the full tool transcript, the graded result, which resource caps the host actually applied, and the commits of every moving part. A trace that needs another file to be interpreted is a trace that stops being interpretable the moment that file changes.",
+  "description": "One trajectory, start to reward. Written by analysis.trace.build_row; every field is populated by a real run - nothing here is hand-authored. The row is deliberately self-contained: task identity, the sampling parameters that make it reproducible, the ordered steps the agent took, the candidate patch it produced, the graded result, which resource caps the host actually applied, and the commits of every moving part. A trace that needs another file to be interpreted is a trace that stops being interpretable the moment that file changes. See docs/trajectory_schema_audit.md for the v2->v3 gap analysis.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
     "run_id",
     "rollout_id",
+    "termination_reason",
     "started_at",
     "finished_at",
     "duration_s",
     "task",
     "agent",
     "budgets",
-    "tool_calls",
+    "turns",
+    "token_usage",
+    "steps",
+    "candidate_patch",
     "result",
+    "reward_components",
+    "hidden_tests",
+    "error",
     "limits_enforced",
     "versions"
   ],
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "2",
-      "description": "Bumped on any breaking change, so an old results/ directory stays readable. v2: ADR 0006 widened reward to [-1,1] and added result.floor_tests."
+      "const": "3",
+      "description": "Bumped on any breaking change, so an old results/ directory stays readable. v2: ADR 0006 widened reward to [-1,1] and added result.floor_tests. v3: adds termination_reason, turns, token_usage, steps[], candidate_patch, reward_components, hidden_tests, error, and agent.checkpoint_id/random_seed/prompt_config_version; the flat tool_calls[] transcript is replaced by the step-structured steps[]. See docs/trajectory_schema_audit.md."
     },
     "run_id": { "type": "string", "minLength": 1 },
     "rollout_id": {
       "type": "string",
       "minLength": 1,
-      "description": "Unique within the run. For GRPO this distinguishes the k samples of one prompt."
+      "description": "Unique within the run. For GRPO this distinguishes the k samples of one prompt: (run_id, task.id, rollout_id) is the group key, and group reward variance is what the gradient is built from."
+    },
+    "termination_reason": {
+      "type": "string",
+      "enum": ["submitted", "max_turns", "max_tool_calls", "timeout", "error"],
+      "description": "The cause, as distinct from result.gates which is the consequence. max_turns and max_tool_calls both fire the no_submit gate; only this field tells them apart. Every rollout ends for exactly one of these reasons, including rollouts that raised."
     },
     "started_at": { "type": "string", "format": "date-time" },
     "finished_at": { "type": "string", "format": "date-time" },
@@ -59,7 +71,7 @@
     "agent": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "model", "transport"],
+      "required": ["kind", "model", "checkpoint_id", "random_seed", "prompt_config_version", "transport"],
       "properties": {
         "kind": {
           "type": "string",
@@ -69,6 +81,19 @@
         "model": {
           "type": ["string", "null"],
           "description": "null for scripted_gold, which has no model."
+        },
+        "checkpoint_id": {
+          "type": ["string", "null"],
+          "description": "The LoRA adapter or checkpoint that generated this rollout, e.g. 'step2-lora-r16-ckpt-0040'. Null for scripted_gold. Without this, two runs of 'the 1.5B model' are indistinguishable, so a claim about an improvement cannot be tied to the weights that produced it."
+        },
+        "random_seed": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "The sampling seed. Null only for scripted_gold, which is deterministic. A rollout that cannot be re-sampled from its own row is not reproducible."
+        },
+        "prompt_config_version": {
+          "type": ["string", "null"],
+          "description": "Identifies the system prompt + tool-description bundle used. A prompt edit changes the dataset; without this the change is invisible in the results."
         },
         "transport": { "type": "string", "enum": ["direct", "gym"] }
       }
@@ -85,27 +110,116 @@
       }
     },
 
-    "tool_calls": {
+    "turns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_turns", "turns_used"],
+      "description": "A turn is one model generation; it may emit zero or one tool call. total_turns therefore cannot be derived from len(tool_calls), which is why it is a separate object.",
+      "properties": {
+        "max_turns": { "type": "integer", "minimum": 1 },
+        "turns_used": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "token_usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt", "completion", "total"],
+      "description": "Episode totals. All null for scripted_gold, which runs no model. Kept even though per-step counts exist in steps[], because an episode total that has to be summed from steps is a total that disagrees with the model server's own counter.",
+      "properties": {
+        "prompt": { "type": ["integer", "null"], "minimum": 0 },
+        "completion": { "type": ["integer", "null"], "minimum": 0 },
+        "total": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+
+    "steps": {
       "type": "array",
-      "description": "The full transcript, in order. Arguments and outputs are truncated to keep a rollouts.jsonl readable - a write_file call carries a whole source file otherwise.",
+      "description": "The ordered trajectory: one entry per turn. This is the structure that makes 'the model saw X, then chose Y' answerable, and it replaces the flat tool_calls[] transcript of v2. A turn with no tool call (the model emitted prose, or a malformed action) still produces a step, with tool_name null - otherwise the turn disappears from the record and turns_used stops reconciling.",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["index", "name", "arguments", "ok", "output", "output_chars"],
+        "required": [
+          "step_id",
+          "timestamp",
+          "observation_summary",
+          "action_type",
+          "tool_name",
+          "tool_arguments",
+          "tool_result_summary",
+          "ok",
+          "duration_ms",
+          "token_count"
+        ],
         "properties": {
-          "index": { "type": "integer", "minimum": 0 },
-          "name": {
-            "type": "string",
-            "description": "Not enum-constrained: an unknown name is exactly what a confused policy emits, and the trace has to be able to record it."
-          },
-          "arguments": { "type": "object" },
-          "ok": { "type": "boolean" },
-          "output": { "type": "string" },
-          "output_chars": {
+          "step_id": {
             "type": "integer",
             "minimum": 0,
-            "description": "Length before truncation, so context pressure stays measurable."
+            "description": "0-based, dense, in execution order. Not a timestamp: two steps can share a millisecond and a step must still have a stable identifier to join on."
+          },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "observation_summary": {
+            "type": "string",
+            "description": "What the agent was shown before deciding, truncated. Deliberately a summary rather than the verbatim context: the verbatim context is reconstructible from the previous step's tool_result_summary plus the prompt config, and storing it twice doubles the row for no extra information."
+          },
+          "action_type": {
+            "type": "string",
+            "enum": ["tool_call", "submit", "no_tool", "malformed"],
+            "description": "no_tool = the model generated text but no parseable tool call. malformed = a call was attempted but did not parse. Both consume a turn and must be visible, because a policy that mostly emits malformed actions is a distinct failure mode from one that emits wrong actions."
+          },
+          "tool_name": {
+            "type": ["string", "null"],
+            "description": "Null when action_type is no_tool or malformed. Not enum-constrained: an unknown name is exactly what a confused policy emits, and the trace has to be able to record it."
+          },
+          "tool_arguments": {
+            "type": ["object", "null"],
+            "description": "Clipped per value at MAX_FIELD_CHARS; null when there was no call."
+          },
+          "tool_result_summary": {
+            "type": ["string", "null"],
+            "description": "The tool output as the agent received it, clipped. Null when there was no call."
+          },
+          "ok": {
+            "type": ["boolean", "null"],
+            "description": "Null when there was no tool call to succeed or fail."
+          },
+          "duration_ms": { "type": "number", "minimum": 0 },
+          "token_count": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "Prompt + completion tokens for this turn's generation. Null for scripted_gold."
           }
+        }
+      }
+    },
+
+    "candidate_patch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present", "sha256", "chars", "truncated", "diff"],
+      "description": "The diff the agent submitted. Recorded because the sandbox is deleted when the episode closes and tool arguments are clipped at 600 chars, so without this the submitted change is unrecoverable after the fact - the one gap no re-run can repair. Never null: an episode that submitted nothing records present=false, so 'no patch' is a recorded fact rather than a missing key.",
+      "properties": {
+        "present": {
+          "type": "boolean",
+          "description": "Whether a non-empty diff was produced. False for a rollout that never submitted, and false for a submission that changed nothing."
+        },
+        "sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Hash of the FULL untruncated diff, so two rollouts can be proven identical even when both are truncated below. Null iff present is false."
+        },
+        "chars": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Length of the full diff before truncation."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True when diff below is shorter than chars. A large patch is evidence of a large patch, not evidence the trace is wrong."
+        },
+        "diff": {
+          "type": ["string", "null"],
+          "description": "Unified diff, clipped. Null iff present is false."
         }
       }
     },
@@ -120,8 +234,7 @@
         "tests_total",
         "floor_tests",
         "gates",
-        "submitted",
-        "per_test"
+        "submitted"
       ],
       "properties": {
         "reward": {
@@ -158,12 +271,69 @@
           },
           "uniqueItems": true
         },
-        "submitted": { "type": "boolean" },
-        "per_test": {
-          "type": "object",
-          "additionalProperties": { "type": "string", "enum": ["passed", "failed", "error", "skipped"] },
-          "description": "nodeid -> outcome. Per-test detail is what makes a failure taxonomy possible later."
+        "submitted": { "type": "boolean" }
+      }
+    },
+
+    "reward_components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correctness", "progress", "validity", "tool", "final"],
+      "description": "reward_v2 decomposition. Components not yet shipped are null, not 0.0 - a 0.0 would read as 'measured and scored zero', which is a different and false claim. result.reward remains the fused total actually used for the gradient.",
+      "properties": {
+        "correctness": {
+          "type": ["number", "null"],
+          "description": "Reward A: the normalised test reward. Null only if not computed."
+        },
+        "progress": {
+          "type": ["number", "null"],
+          "description": "Reward B: best improvement in tests-passed observed across run_tests calls. Needs steps[] - this is the component that did not exist without Phase 2. Null if deferred or not measurable."
+        },
+        "validity": {
+          "type": ["number", "null"],
+          "description": "Reward C: did the run respect the rules without tripping a gate. Null until shipped."
+        },
+        "tool": {
+          "type": ["number", "null"],
+          "description": "Reward D: tool-use quality. Null until shipped."
+        },
+        "final": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1,
+          "description": "The fused reward actually used for training. Must equal result.reward; the loader asserts this so the two can never drift apart."
         }
+      }
+    },
+
+    "hidden_tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["declared", "passed", "floor", "failed"],
+      "description": "The redacted, agent-safe summary of the hidden suite. Per-test nodeids live only in rollouts_private.jsonl (see docs/trajectory_schema_audit.md L2): the analysis needs them, but a dashboard or a log that dumps a trajectory row must never be able to hand the model the names of the tests it failed.",
+      "properties": {
+        "declared": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "floor": { "type": "integer", "minimum": 0 },
+        "failed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of failing tests. A count, deliberately not a list of names."
+        }
+      }
+    },
+
+    "error": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["type", "message"],
+      "description": "Non-null iff termination_reason is 'error'. A rollout that raised is still a trajectory and is still persisted: the runs that explain a zero-variance GRPO group are exactly the runs whose rows were previously missing.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Exception class name, e.g. 'TimeoutError'. A class name, not a traceback, so the row stays readable."
+        },
+        "message": { "type": "string", "description": "Clipped to MAX_FIELD_CHARS." }
       }
     },
 

@@ -30,6 +30,34 @@ Held-out 即係保留起嚟嘅測試題，唔應該用佢嘅答案去訓練；�
 
 所以準確啲講，呢個係 FYP 嘅內部 benchmark，採用 SWE-style 嘅可執行題目設計；但佢唔係直接下載返嚟嘅 SWE-Gym Lite dataset，亦唔係 SWE-Gym Lite 原本嘅資料格式。
 
+## 1.5 Trajectory、Rollout 同 Episode
+
+呢度有三個字要好準確咁用，因為佢哋唔可以互換。
+
+**Trajectory** 嘅定義係：由題目開始，一直到提交、超時或者終止為止，模型觀察到啲乜、作出咩決定、叫咗邊個工具、環境回應咩、同埋最後驗證結果——呢個完整而有序嘅序列，就係一條 trajectory。
+
+三個字嘅關係係咁：
+
+- **Episode** 係環境：一個 sandbox 加一條題目，由 `EpisodeSession.open()` 開到 `close()`。
+- **Rollout** 係過程——模型喺呢個 episode 入面行一次，得到一個 `rollout_id`。
+- **Trajectory** 係紀錄——呢次 rollout 入面所有嘢嘅有序紀錄，即係 `rollouts.jsonl` 嘅一行。
+
+可以咁講：Episode 係環境，Rollout 係過程，Trajectory 係紀錄。一行 JSONL 就係一條 trajectory，亦係一次 rollout 喺一個 episode 入面嘅完整紀錄。
+
+**點解對 GRPO 咁重要：** 同一條 prompt 抽 k 次，就係 k 條 trajectory。佢哋 `task_id` 同 `run_id` 一樣，但 `rollout_id` 唔同。呢三個欄位就係 group key，而 group 入面 reward 嘅變異數，正正就係 gradient 嘅來源。如果將呢三個字撈亂，一組完全相同或者全部炒咗嘅 rollout，就會睇落好似一組「正常、但變異數係零」嘅 group。
+
+**終止原因**只有五個，記錄喺 `termination_reason`：
+
+- `submitted`：模型叫咗 `submit()`。
+- `max_turns`：輪數用完但未提交。
+- `max_tool_calls`：工具次數用完但未提交。
+- `timeout`：超時。
+- `error`：harness 拋出例外——但條 trajectory 依然會保存，並且記低係邊個 error class。
+
+`termination_reason` 係**原因**，`result.gates` 係**後果**。`max_turns` 同 `max_tool_calls` 都會觸發同一個 `no_submit` gate，所以只有終止原因可以分得開佢哋。
+
+**講法：**「炒咗嘅 rollout 都係一條 trajectory。以前我哋會啱啱好失去咗嗰啲紀錄，於是全部炒嘅 group 平均出嚟就係 0.0、變異數零——同『行得好正常但乜都做唔到』一模一樣，分唔開。」
+
 ## 2. Agent Harness
 
 第二部分係 Agent Harness。你可以當佢係一個流程協調員：佢負責將題目交畀模型，將模型提出嘅工具要求交去執行，再將工具結果交返畀模型。
