@@ -491,7 +491,7 @@ episode.
 > scored at zero. The shape above was not adopted wholesale, and the reason is in the design
 > document: three of those four are either already gates or are incentives to submit early.
 
-**3.6 Reward unit tests** — `rewards/tests/test_v2.py` (29 tests)
+**3.6 Reward unit tests** — `rewards/tests/test_v2.py` (45 tests)
 
 - [X] All tests pass, submission valid (`test_solving_everything_with_perfect_progress_reaches_0_80`)
 - [X] Partial improvement (`test_progress_is_measured_against_the_first_observation_not_zero`)
@@ -500,15 +500,32 @@ episode.
   (`test_a_negative_correctness_with_perfect_progress_is_still_negative`)
 - [X] Syntax error (`test_a_gated_run_stays_at_the_bottom_of_the_scale`, parametrised)
 - [X] No submit (`test_a_gated_run_stays_at_the_bottom_of_the_scale`, parametrised)
-- [ ] Empty patch — **not covered**; needs the `invalid_patch` gate that does not exist yet
+- [ ] Empty patch — **blocked**: no `invalid_patch` or `no_repo_change` policy exists, so
+  there is no gate to assert against and inventing one is out of scope for this phase
 - [X] Tests modified (`test_a_gated_run_stays_at_the_bottom_of_the_scale`, parametrised)
-- [ ] Forbidden file modified — **not covered**; no separate gate to test
+- [ ] Forbidden file modified — **blocked**: currently subsumed by the `tests_modified` glob
+  behaviour and has no separate gate taxonomy to test
 - [X] Valid tool calls but wrong answer (`test_progress_alone_cannot_reach_a_solved_rollout_no_progress`)
 - [X] Correct answer with heavier tool use (efficiency is absent, so it cannot be penalised;
   asserted structurally by `test_only_the_shipped_components_carry_weight`)
-- [ ] No double counting between components
-- [ ] Reward always finite (no `NaN` / `Infinity`)
-- [ ] Reward stays within the declared range
+- [X] No double counting between components — each observation feeds exactly one component:
+  `test_changing_only_correctness_moves_component_a_and_leaves_progress_alone`,
+  `test_changing_only_progress_moves_component_b_and_leaves_correctness_alone`,
+  `test_the_two_components_are_the_only_addends_of_the_non_gated_total`,
+  `test_one_observation_feeds_exactly_one_component`,
+  `test_a_gate_zeroes_the_final_but_preserves_the_diagnostic_components`
+- [X] Reward always finite (no `NaN` / `Infinity`) —
+  `test_final_is_finite_for_every_admissible_combination` (exhaustive),
+  `test_very_large_valid_counts_stay_finite`,
+  `test_extreme_progress_inputs_stay_finite_and_bounded`,
+  `test_the_degenerate_denominator_is_a_contract_violation_not_a_nan`
+- [X] Reward stays within the declared range —
+  `test_every_final_value_stays_within_the_declared_outer_range`,
+  `test_a_gate_reaches_exactly_the_declared_minimum`,
+  `test_the_reachable_maximum_is_the_sum_of_the_shipped_weights`,
+  `test_negative_correctness_stays_above_the_declared_minimum`,
+  `test_the_reachable_range_is_narrower_than_the_declared_range`
+  — declared outer range is `[−1.0, 1.0]`; reachable v2 range is `[−1.0, 0.80]`
 
 ---
 

@@ -39,6 +39,26 @@ thing the offline measurement produced.
 The pooled standard deviation of 0.500 is not reassurance: it is the spread *between* runs,
 which GRPO never sees.
 
+### The two ranges, which are not the same thing
+
+Conflating these is a documentation bug, so they are stated separately and each is pinned by
+a test in `rewards/tests/test_v2.py`.
+
+| range | values | what it is |
+|---|---|---|
+| **declared outer range** | `[REWARD_MIN, REWARD_SOLVED]` = `[−1.0, 1.0]` | the clamp applied to the fused value; the scale every reward lives on |
+| **reachable v2 range** | `[−1.0, 0.80]` | the extremes actually attainable with only A and B shipped |
+
+The reachable maximum is `0.60 × 1.0 + 0.20 × 1.0 = 0.80`, **not 1.0**. The remaining 0.20
+belongs to components C and D, which are deferred. They are absent from `WEIGHTS` rather than
+weighted `0.0` precisely so that the reachable maximum is whatever the shipped weights sum to
+— shipping C or D should widen the reachable range on purpose, not by accident.
+
+The reachable minimum is the gate value `−1.0`, and the lowest *non-gated* score is `−0.45`
+(correctness `−0.75`, the worst a real task shape can produce, times 0.60). A gate is the only
+way to reach the bottom of the scale. Every admissible rollout is asserted against the outer
+range; the reachable extremes are asserted separately.
+
 ## 2. The components
 
 | | component | weight | status | measures |
