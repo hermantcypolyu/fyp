@@ -19,6 +19,13 @@ a controlled before-and-after evaluation, and held-out evaluation remain incompl
 [docs/TRAINING_READINESS.md](docs/TRAINING_READINESS.md) for the historical handoff and remaining
 work.
 
+**Model plan.** `Qwen2.5-Coder-1.5B-Instruct` is used to validate the reward, the GRPO update and
+the closed-loop pipeline. A **3B** model is the final main model, adopted only once that pipeline
+is proven. 7B training is an optional extension rather than a graduation requirement, and an A100
+is not a current hardware requirement. A Hermes harness comparison is likewise optional, and any
+such comparison keeps the model, tasks, reward and verifier identical so that only the harness
+varies. Existing 7B results are external baseline pilots, not evidence of this pipeline's effect.
+
 ---
 
 ## Quick start (~5 minutes, CPU only)
@@ -57,6 +64,7 @@ Run `make help` for every target.
 
 | You want to… | Read |
 |---|---|
+| See the current status and phased plan | [`docs/CURRENT_PROJECT_STATUS.md`](docs/CURRENT_PROJECT_STATUS.md) ⭐ |
 | Present the project to a new audience | [`docs/demo/cantonese_presentation_script.md`](docs/demo/cantonese_presentation_script.md) |
 | Walk through the implementation | [`docs/demo/code_walkthrough.md`](docs/demo/code_walkthrough.md) |
 | Start RL training | [`docs/TRAINING_READINESS.md`](docs/TRAINING_READINESS.md) ⭐ |
