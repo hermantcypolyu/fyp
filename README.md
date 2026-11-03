@@ -28,6 +28,24 @@ varies. Existing 7B results are external baseline pilots, not evidence of this p
 
 ---
 
+## Research question
+
+> **Can multi-component verifiable rewards, combined with GRPO and LoRA, improve the multi-turn
+debugging performance of a small coding agent?**
+
+Every experiment in this repository must bear on that question directly; an experiment that does
+not is out of scope. The agent is given a failing Python repository, inspects code, edits it with
+tools, and runs tests. A verifier grades the hidden test suite and turns the result into a reward,
+and that reward is the training signal.
+
+The line of attack is deliberately staged. `Qwen2.5-Coder-1.5B-Instruct` is the working model on
+which the reward, the GRPO update and the closed loop are proven; a 3B model is the main final
+experiment and is gated on that success; 7B is an optional extension. The report explains why 1.5B
+precedes 3B: the reward and the training loop must be validated cheaply before compute is spent on
+a larger model.
+
+---
+
 ## Quick start (~5 minutes, CPU only)
 
 ```bash
@@ -68,10 +86,9 @@ Run `make help` for every target.
 | Present the project to a new audience | [`docs/demo/cantonese_presentation_script.md`](docs/demo/cantonese_presentation_script.md) |
 | Walk through the implementation | [`docs/demo/code_walkthrough.md`](docs/demo/code_walkthrough.md) |
 | Start RL training | [`docs/TRAINING_READINESS.md`](docs/TRAINING_READINESS.md) ⭐ |
-| Understand the reward | [`docs/reward_design.md`](docs/reward_design.md) |
+| Understand the reward | `rewards/compose.py` and [ADR 0006](docs/decisions/0006-normalise-reward-against-the-measured-floor.md) |
 | Add task #41 | [`docs/task_authoring_guide.md`](docs/task_authoring_guide.md) |
 | Understand the NeMo Gym integration | [`docs/nemo_gym_notes.md`](docs/nemo_gym_notes.md) |
-| See the academic grounding | [`docs/literature_review.md`](docs/literature_review.md) |
 | Know why something is the way it is | [`docs/decisions/`](docs/decisions/) |
 | See the build history | [`PROGRESS.md`](PROGRESS.md) |
 

@@ -8,6 +8,10 @@
 
 我想研究嘅係：可唔可以俾一個 AI agent 接手一條 Python 程式修正題，自己睇 code、用工具改 code、跑測試，再根據測試結果計分，最後將呢個分數用喺模型訓練？
 
+研究問題可以正式寫成一句：**多組件嘅可驗證 reward，配合 GRPO 同 LoRA，能唔能夠改善一個細模型 agent 嘅多輪 debug 表現？**
+
+呢個 project 嘅實驗全部都要直接回答呢條問題；答唔到嘅，就唔屬於今次範圍。
+
 所以如果舉例既話，
 我會用「考生做題」做比喻：
 題目係考卷，
@@ -149,5 +153,9 @@ Phase F4 用一條內部 training task 做咗一次 optimizer update：有八條
 第四，訓練程式整理 rollout、計 Advantage 同 clipped loss，然後更新 LoRA 參數。
 
 目前我已經驗證過一次單步更新同 checkpoint 流程；至於模型能力有冇改善，仲需要進一步實驗證明。SWE-Gym Lite 則係未來計劃接入嘅題目來源。
+
+關於模型規模，路線係固定嘅：1.5B 用嚟驗證 reward、GRPO 同 closed loop 係咪行得通；確認之後，3B 先至係最後嘅主要實驗模型。報告要解釋點解由 1.5B 開始：reward 同訓練流程要先用低成本驗證好，先至值得花算力落更大嘅模型。7B 屬於可選延伸，唔係畢業要求；現有 7B 結果只係外部 baseline pilot，唔係證明呢條 pipeline 有效。A100 喺現階段唔係必須嘅硬件。
+
+Harness 方面，主實驗會保持現有嘅 custom coding-agent harness 唔變。Hermes 比較屬於可選延伸，唔喺主線之內；如果將來真係做，模型、題目、reward 同 verifier 都要保持一致，令到唯一差別只係 harness 本身。
 
 > **一句講晒：我建立咗一條由出題、做題、改卷到嘗試更新模型嘅 pipeline，並逐步驗證每一段有冇接通。**

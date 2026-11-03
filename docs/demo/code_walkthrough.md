@@ -1,5 +1,9 @@
 # Pipeline Demo — Code Walkthrough
 
+**Research question.** Can multi-component verifiable rewards, combined with GRPO and LoRA,
+improve the multi-turn debugging performance of a small coding agent? Every component below
+exists to answer that question, and an experiment that does not bear on it is out of scope.
+
 ## Repository map
 
 ```text

@@ -31,9 +31,14 @@ Verified by a real command, with output stored under `results/` or reproduced by
 - **Five-task SWE-Gym Lite baseline pilot** — external sanity check only; **not** a training
   dataset and **not** evidence of improvement.
 
-Measured facts at the last full verification: **232 unit tests passed, 1 skipped**, 0 ruff
-findings, **36/36** tasks solvable by gold and failable without it, held-out seal
-`318fedc8868b` intact.
+Measured facts at the last full verification: **303 unit tests passed, 0 skipped**, **36/36** tasks
+solvable by gold and failable without it, held-out seal `318fedc8868b` intact.
+
+**Lint is not currently clean.** `uv run ruff check .` reports **12 errors** and
+`ruff format --check` would reformat **16 files**, so `make check` exits non-zero. All 12 errors
+predate the current work and sit in files unrelated to the reward and trajectory roadmaps
+(`docker_sandbox.py`, `session.py`, `swe_gym_session.py`, three test modules, and three scripts).
+This is recorded as a known defect rather than silently reformatted; see open item below.
 
 ---
 
@@ -221,19 +226,28 @@ git push origin main
 
 ### Phase 1 — Formalise the scope
 
-- [ ] Write the research question into `README.md`
-- [ ] Write it into the proposal update / progress report
-- [ ] Write it into the presentation opening
-- [ ] 1.5B used for reward, GRPO, and closed-loop validation
-- [ ] 3B used as the final main model
-- [ ] 7B not a graduation requirement
-- [ ] A100 not a current hardware requirement
-- [ ] Report explains the 1.5B → 3B progression
-- [ ] Existing 7B results described only as external baseline pilots
-- [ ] Main experiment keeps the current harness
-- [ ] Hermes placed in optional extension
-- [ ] Unverified framework names kept out of conclusions
-- [ ] Any future Hermes comparison keeps model, tasks, reward, and verifier identical
+- [x] Write the research question into `README.md`
+- [ ] Write it into the proposal update / progress report — **outside this repository**
+- [x] Write it into the presentation opening
+- [x] 1.5B used for reward, GRPO, and closed-loop validation
+- [x] 3B used as the final main model
+- [x] 7B not a graduation requirement
+- [x] A100 not a current hardware requirement
+- [x] Report explains the 1.5B → 3B progression
+- [x] Existing 7B results described only as external baseline pilots
+- [x] Main experiment keeps the current harness
+- [x] Hermes placed in optional extension
+- [x] Unverified framework names kept out of conclusions
+- [x] Any future Hermes comparison keeps model, tasks, reward, and verifier identical
+
+The research question is stated verbatim in `README.md` §"Research question" and
+`docs/demo/code_walkthrough.md`; the presentation script states it in Cantonese and repeats the
+model progression in its closing section. The scope rules above (harness fixed, Hermes optional,
+7B optional, A100 not required, unverified names excluded) are enumerated in §4 of this document.
+
+**Open defect carried forward:** `make check` fails on lint (12 ruff errors, 16 files needing
+format). Fix with `make fmt` plus a manual pass over the non-fixable `UP022`, `B904` and `B905`
+findings, or scope lint to changed files. Do this before any release claim that CI is green.
 
 ---
 
