@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-11-03
 **Project:** RL of Small Coding Agents with Verifiable Rewards (FYP 2026/27)
-**Stage:** Post-F4. Reward redesign and GRPO audit in progress.
+**Stage:** Post-F4. Reward redesign and GRPO audit in progress; Phase 7 is the next RL execution stage.
 
 This document is the single source of truth for **what is done, what is in progress, and what is not yet proven**.
 It supersedes dated claims inside `README.md`, `PROGRESS.md`, and the demo scripts where they disagree.
@@ -43,6 +43,8 @@ solvable by gold and failable without it, held-out seal `318fedc8868b` intact, a
   `reward_v1` is retained and is not deleted or overwritten.
 - **GRPO implementation audit** — determining whether the current training path implements the
   full GRPO objective or only a group-relative reward-weighted update.
+- **Phase 7 preparation** — preparing a small, controlled 1.5B GRPO + LoRA run after the reward
+  and GRPO checks are complete.
 - **1.5B before-and-after evaluation** — protocol fixed, baseline rollouts not yet collected.
 
 ---
@@ -74,11 +76,11 @@ Every experiment must answer this question directly. If an experiment does not, 
 
 ### 4.2 Model progression (fixed)
 
-| Model | Role | Status |
-| --- | --- | --- |
-| **1.5B** | Reward, GRPO, and closed-loop validation | primary working model |
-| **3B** | Main final experiment | gated on 1.5B success |
-| 7B | Optional extension, **not** a graduation requirement | existing runs are external baseline pilots only |
+| Model          | Role                                                       | Status                                          |
+| -------------- | ---------------------------------------------------------- | ----------------------------------------------- |
+| **1.5B** | Reward, GRPO, and closed-loop validation                   | primary working model                           |
+| **3B**   | Main final experiment                                      | gated on 1.5B success                           |
+| 7B             | Optional extension, **not** a graduation requirement | existing runs are external baseline pilots only |
 
 Hardware: the A5000 (24 GB) / A6000 class GPU is the plan of record. **A100 is not required at
 this stage.**
@@ -105,10 +107,10 @@ The current custom coding-agent harness is the main experiment.
 The three terms below are used with these meanings throughout the code, the schema, and the
 report. They are not interchangeable, and the distinction is load-bearing for GRPO.
 
-| Term | Definition | Cardinality |
-|---|---|---|
-| **Episode** | One materialised sandbox plus one task, from `EpisodeSession.open()` to `close()`. Owns the working tree, the tool log and the grade. | 1 sandbox |
-| **Rollout** | One sampling pass of the policy through one episode, ending in a submission, an exhausted budget, or an error. | 1 episode, 1 `rollout_id` |
+| Term                 | Definition                                                                                                                                                                                                      | Cardinality                 |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| **Episode**    | One materialised sandbox plus one task, from `EpisodeSession.open()` to `close()`. Owns the working tree, the tool log and the grade.                                                                       | 1 sandbox                   |
+| **Rollout**    | One sampling pass of the policy through one episode, ending in a submission, an exhausted budget, or an error.                                                                                                  | 1 episode, 1 `rollout_id` |
 | **Trajectory** | The recorded sequence of everything the agent observed, decided and received within one rollout: the ordered steps, their tool calls and results, the candidate patch, the verification summary and the reward. | 1 row of `rollouts.jsonl` |
 
 A trajectory is the **artifact**, a rollout is the **process** that produced it, and an episode is
@@ -124,13 +126,13 @@ valid group with zero variance.
 **Valid termination reasons.** Every trajectory ends for exactly one reason, recorded in
 `termination_reason`:
 
-| Value | Meaning |
-|---|---|
-| `submitted` | The agent called `submit()`; verification ran against the submitted tree. |
-| `max_turns` | The turn budget was exhausted without a submission. |
-| `max_tool_calls` | The tool-call budget was exhausted without a submission. |
-| `timeout` | The wall clock or a per-tool timeout ended the rollout. |
-| `error` | The harness raised. The trajectory is **still persisted**, with the error class named. |
+| Value              | Meaning                                                                                      |
+| ------------------ | -------------------------------------------------------------------------------------------- |
+| `submitted`      | The agent called `submit()`; verification ran against the submitted tree.                  |
+| `max_turns`      | The turn budget was exhausted without a submission.                                          |
+| `max_tool_calls` | The tool-call budget was exhausted without a submission.                                     |
+| `timeout`        | The wall clock or a per-tool timeout ended the rollout.                                      |
+| `error`          | The harness raised. The trajectory is **still persisted**, with the error class named. |
 
 `termination_reason` records the **cause**; `result.gates` records the **consequence**. They are
 not redundant: `max_turns` and `max_tool_calls` both fire the same `no_submit` gate, and only the
@@ -193,7 +195,7 @@ GRPO implementation audit
         |
 1.5B baseline
         |
-1.5B GRPO + LoRA training
+Phase 7: 1.5B GRPO + LoRA training
         |
 Checkpoint reload
         |
@@ -210,13 +212,20 @@ Optional Hermes comparison
 Optional 7B extension
 ```
 
-The immediate priority is **not** another GPU run. It is:
+The immediate priority is to finish the prerequisites and then execute **Phase 7**, rather than
+starting a large or uncontrolled GPU experiment:
 
 1. Trajectory definition
 2. Multi-component reward v2
 3. GRPO audit
 
-Only after these three are complete does the 1.5B closed-loop experiment begin.
+Only after these three are complete does the 1.5B closed-loop experiment begin. Phase 7 is the
+recommended stage for the actual reinforcement-learning loop: collect multiple rollouts per task,
+compute verified rewards and group-relative advantages, update only LoRA parameters, and repeat
+for a small 2–5 iteration run. Start with a few training tasks, require reward variation, save
+each checkpoint, evaluate briefly after each iteration, and stop if loss, gradients, KL, validity,
+checkpoint reload, or data-isolation checks fail. The existing one-step F4 update remains an
+optimizer and plumbing validation, not evidence of multi-iteration RL improvement.
 
 ---
 
@@ -235,13 +244,13 @@ sed -n '1,240p' docs/demo/cantonese_presentation_script.md
 
 Checklist:
 
-- [x] The three documents are accurate
-- [x] Stale claims removed (e.g. "no training of any kind has been done")
-- [x] "Controlled GRPO-style LoRA update completed" retained
-- [x] "Model improvement not yet proven" stated explicitly
-- [x] SWE-Gym Lite is not described as a formal RL training dataset
-- [x] 7B is not described as the next required model
-- [x] Hermes is described as an optional extension
+- [X] The three documents are accurate
+- [X] Stale claims removed (e.g. "no training of any kind has been done")
+- [X] "Controlled GRPO-style LoRA update completed" retained
+- [X] "Model improvement not yet proven" stated explicitly
+- [X] SWE-Gym Lite is not described as a formal RL training dataset
+- [X] 7B is not described as the next required model
+- [X] Hermes is described as an optional extension
 
 ```bash
 git add README.md docs/demo/code_walkthrough.md docs/demo/cantonese_presentation_script.md
@@ -253,27 +262,27 @@ git push origin main
 
 **0.2 Status document**
 
-- [x] `docs/CURRENT_PROJECT_STATUS.md` created (this file)
-- [x] Linked from `README.md` ("Where to go next")
-- [x] Model plan (1.5B → 3B, 7B optional, Hermes optional) stated in `README.md`
+- [X] `docs/CURRENT_PROJECT_STATUS.md` created (this file)
+- [X] Linked from `README.md` ("Where to go next")
+- [X] Model plan (1.5B → 3B, 7B optional, Hermes optional) stated in `README.md`
 
 ---
 
 ### Phase 1 — Formalise the scope
 
-- [x] Write the research question into `README.md`
+- [X] Write the research question into `README.md`
 - [ ] Write it into the proposal update / progress report — **outside this repository**
-- [x] Write it into the presentation opening
-- [x] 1.5B used for reward, GRPO, and closed-loop validation
-- [x] 3B used as the final main model
-- [x] 7B not a graduation requirement
-- [x] A100 not a current hardware requirement
-- [x] Report explains the 1.5B → 3B progression
-- [x] Existing 7B results described only as external baseline pilots
-- [x] Main experiment keeps the current harness
-- [x] Hermes placed in optional extension
-- [x] Unverified framework names kept out of conclusions
-- [x] Any future Hermes comparison keeps model, tasks, reward, and verifier identical
+- [X] Write it into the presentation opening
+- [X] 1.5B used for reward, GRPO, and closed-loop validation
+- [X] 3B used as the final main model
+- [X] 7B not a graduation requirement
+- [X] A100 not a current hardware requirement
+- [X] Report explains the 1.5B → 3B progression
+- [X] Existing 7B results described only as external baseline pilots
+- [X] Main experiment keeps the current harness
+- [X] Hermes placed in optional extension
+- [X] Unverified framework names kept out of conclusions
+- [X] Any future Hermes comparison keeps model, tasks, reward, and verifier identical
 
 The research question is stated verbatim in `README.md` §"Research question" and
 `docs/demo/code_walkthrough.md`; the presentation script states it in Cantonese and repeats the
@@ -293,11 +302,11 @@ commit. Keep it green: run `make check` before any claim that verification passe
 > environment responses, and verification outcomes from task initialisation until submission,
 > timeout, or termination.
 
-- [x] Add the definition to the methodology (§4.4 above)
-- [x] Add it to the code walkthrough (`docs/demo/code_walkthrough.md`)
-- [x] Add it to the presentation script (`docs/demo/cantonese_presentation_script.md`)
-- [x] Separate the terms **trajectory**, **rollout**, and **episode** explicitly (§4.4)
-- [x] Define the valid termination reasons (§4.4; enum in `analysis/trace_schema.json`)
+- [X] Add the definition to the methodology (§4.4 above)
+- [X] Add it to the code walkthrough (`docs/demo/code_walkthrough.md`)
+- [X] Add it to the presentation script (`docs/demo/cantonese_presentation_script.md`)
+- [X] Separate the terms **trajectory**, **rollout**, and **episode** explicitly (§4.4)
+- [X] Define the valid termination reasons (§4.4; enum in `analysis/trace_schema.json`)
 
 **2.2 Trajectory schema**
 
@@ -313,36 +322,41 @@ Every step must record:
 `step_id`, `timestamp`, observation summary, model action, tool name, tool arguments, tool result
 summary, success/error, duration, token count.
 
-- [x] Audit the existing JSONL fields against the list above (`docs/trajectory_schema_audit.md`; 9 present, 3 partial, 8 missing)
-- [x] Identify missing fields (same document, gap register G1–G8)
-- [x] Update the schema (`analysis/trace_schema.json` bumped to v3; v2 frozen at `analysis/trace_schema_v2.json`)
-- [x] Add schema validation (validate-on-write, dispatched by the row's own `schema_version`)
-- [x] Add unit tests (`analysis/tests/test_trajectory_phase2.py`, 18 tests)
-- [x] Guarantee a unique ID per trajectory (`run_id` + `task.id` + `rollout_id`; `agent.checkpoint_id`/`random_seed`/`prompt_config_version` complete the identity)
-- [x] Guarantee failed trajectories are also persisted (`build_row(result=None, error=...)` writes a valid `termination_reason: "error"` row)
+- [X] Audit the existing JSONL fields against the list above (`docs/trajectory_schema_audit.md`; 9 present, 3 partial, 8 missing)
+- [X] Identify missing fields (same document, gap register G1–G8)
+- [X] Update the schema (`analysis/trace_schema.json` bumped to v3; v2 frozen at `analysis/trace_schema_v2.json`)
+- [X] Add schema validation (validate-on-write, dispatched by the row's own `schema_version`)
+- [X] Add unit tests (`analysis/tests/test_trajectory_phase2.py`, 18 tests)
+- [X] Guarantee a unique ID per trajectory (`run_id` + `task.id` + `rollout_id`; `agent.checkpoint_id`/`random_seed`/`prompt_config_version` complete the identity)
+- [X] Guarantee failed trajectories are also persisted (`build_row(result=None, error=...)` writes a valid `termination_reason: "error"` row)
 
 **2.3 Prevent private-data leakage**
 
 The agent must never see: hidden test contents, the gold patch, the reference solution, private
 verifier internals, `FAIL_TO_PASS` answers, or `PASS_TO_PASS` answers.
 
-- [x] Agent-visible JSON separated from private verification JSON (`rollouts.jsonl` vs `rollouts_private.jsonl`, joined on `(run_id, rollout_id)`)
-- [x] Trajectory records only a hidden-test summary (`hidden_tests` is counts only: declared / passed / floor / failed)
-- [x] Hidden-test error detail is never returned to the model (verifier truncates to a count; asserted by test)
-- [x] Dashboard and logs cannot accidentally expose the gold patch (the row carries no gold-patch path or content; only `candidate_patch`, which is the agent's own diff)
-- [x] A leakage regression test exists (`analysis/tests/test_trajectory_phase2.py`, the `2.3 leakage` block)
+- [X] Agent-visible JSON separated from private verification JSON (`rollouts.jsonl` vs `rollouts_private.jsonl`, joined on `(run_id, rollout_id)`)
+- [X] Trajectory records only a hidden-test summary (`hidden_tests` is counts only: declared / passed / floor / failed)
+- [X] Hidden-test error detail is never returned to the model (verifier truncates to a count; asserted by test)
+- [X] Dashboard and logs cannot accidentally expose the gold patch (the row carries no gold-patch path or content; only `candidate_patch`, which is the agent's own diff)
+- [X] A leakage regression test exists (`analysis/tests/test_trajectory_phase2.py`, the `2.3 leakage` block)
 
 ---
 
 ### Phase 3 — Multi-component reward *(highest priority)*
 
+**Outcome: A and B shipped; C and D deferred; E rejected as a training reward.**
+See `docs/reward_v2_design.md` and `rewards/v2.py`.
+
 **3.1 Keep the existing reward as the baseline**
 
-- [ ] `reward_v1` implementation retained
-- [ ] `reward_v1` tests retained
-- [ ] `reward_v2` design document added
-- [ ] Both can be computed over the same trajectory for comparison
-- [ ] Historical results are not overwritten
+- [X] `reward_v1` implementation retained (`rewards/compose.py`, untouched as component A)
+- [X] `reward_v1` tests retained (`rewards/tests/test_compose.py`, unmodified)
+- [X] `reward_v2` design document added (`docs/reward_v2_design.md`)
+- [X] Both can be computed over the same trajectory for comparison
+  (`scripts/reward_distribution.py` scores all 162 historical rollouts under both)
+- [X] Historical results are not overwritten (the script is read-only; the report lands in
+  `results/analysis/reward_v2_offline.json`)
 
 **3.2 Reward components**
 
@@ -350,19 +364,30 @@ verifier internals, `FAIL_TO_PASS` answers, or `PASS_TO_PASS` answers.
 
 Hidden-test pass fraction, target tests passed, regression tests maintained.
 
-- [ ] Correctness carries the highest weight
-- [ ] Computed only by the private verifier
-- [ ] Hidden tests never exposed to the agent
+- [X] Correctness carries the highest weight (0.60 vs 0.20)
+- [X] Computed only by the private verifier (unchanged `normalised_reward`)
+- [X] Hidden tests never exposed to the agent (unchanged verifier contract)
 
 **B. Progress** — did the result improve relative to before the edit?
 
-- [ ] Baseline test state recorded
-- [ ] Final test state recorded
-- [ ] Net improvement computed
-- [ ] Previously passing tests protected from regression
-- [ ] Regression penalty decided
+- [X] Baseline test state recorded (the *first* `run_tests` observation, not 0)
+- [X] Final test state recorded (best-seen across all `run_tests` calls)
+- [X] Net improvement computed (`smoke_delta`, capped by `MAX_SMOKE_DELTA`)
+- [X] Previously passing tests protected from regression (regression is priced by A, not
+  double-charged; ending below baseline scores 0 progress)
+- [X] Regression penalty decided (progress never goes negative; A carries it)
+- [X] **Unblocked — the data was always there.** An earlier revision marked B "blocked,
+  because the toolbox does not record per-turn test counts". That was wrong: `run_tests`
+  writes `"N/M passed (...)"` into `ToolResult.output`, and the rollout JSONL keeps the full
+  tool transcript. `rewards/v2.py::smoke_delta` reads it, and
+  `scripts/reward_distribution.py` now recovers progress for every historical row.
+- [X] **Measured: B observes zero progress on all 162 historical rollouts.** 95 of them ran
+  the smoke suite; none ended with more passing tests than it started with, and only 4 ever
+  called `run_tests` more than once. B is correct and measurable — the behaviour it prices
+  never occurs. This is a model-behaviour finding, not a reward defect, and it is pinned by
+  `rewards/tests/test_progress_recovery.py::test_no_historical_rollout_ever_improved`.
 
-**C. Submission validity** — is the submission valid?
+**C. Submission validity** — is the submission valid? *(**deferred** to Phase 4)*
 
 Submitted; patch applies; syntax correct; non-empty change; no out-of-scope writes.
 
@@ -370,9 +395,12 @@ Submitted; patch applies; syntax correct; non-empty change; no out-of-scope writ
 - [ ] Empty / no-op patch defined
 - [ ] Invalid patch defined
 - [ ] Out-of-scope change defined
-- [ ] Soft penalty vs hard gate decided per case
+- [X] Soft penalty vs hard gate decided per case: **gate**, because every case except
+  "empty no-op patch" is already a gate (`no_submit`, `syntax_broken`, `tests_modified`,
+  `sandbox_escape`, `invalid_patch`, `forbidden_path_modified`). Pricing them again as a
+  weight would score the same failure twice.
 
-**D. Tool behaviour** — did the agent use tools reasonably?
+**D. Tool behaviour** — did the agent use tools reasonably? *(**deferred** to Phase 4)*
 
 Tool-call format correctness, tool error rate, invalid arguments, repeated no-op operations,
 whether the agent responded to failing tests.
@@ -382,71 +410,102 @@ whether the agent responded to failing tests.
 - [ ] No fixed solution order required
 - [ ] Reasonable exploration not penalised
 
-**E. Efficiency** — what did the task cost?
+> Deferred because shipping C and D alongside A and B would move four weights at once while
+> the model's variance is still zero, and a resulting change in behaviour could not be
+> attributed to any one of them. D is also the component most likely to encode a preferred
+> *strategy* rather than an outcome.
+
+**E. Efficiency** — what did the task cost? *(**rejected** as a training reward)*
 
 Turns, tool calls, tokens, runtime, repeated file reads, repeated unchanged test runs.
 
-- [ ] Efficiency keeps a low weight
-- [ ] Correctness always outweighs efficiency
-- [ ] Premature submission not encouraged
-- [ ] Efficiency bonus only when correct or valid
-- [ ] Budget-normalised score used
+- [X] Efficiency keeps a low weight — **zero**, in the training reward
+- [X] Correctness always outweighs efficiency (trivially, since E is absent)
+- [X] Premature submission not encouraged — the reason E is rejected: an efficiency term in
+  the reward teaches the agent to submit sooner, and the cheapest way to submit sooner is to
+  submit without working. The budget is already enforced server-side (`max_tool_calls`) and
+  agent-side (`max_turns`), so an efficiency term adds an incentive and no information.
+- [X] Efficiency bonus only when correct or valid — moot; it is an **evaluation metric**
+  (turns-to-solve, tokens-per-solved-task), not a reward
+- [X] Budget-normalised score used — for the metric, not the reward
 
 **3.3 Hard-zero safety gates**
 
-- [ ] `no_submit`
-- [ ] `syntax_broken`
-- [ ] `tests_modified`
-- [ ] `private_data_access`
-- [ ] `sandbox_escape`
-- [ ] `invalid_patch`
-- [ ] `forbidden_path_modified`
-- [ ] `malicious_or_prohibited_action`
+Six are implemented in `envs/coding_env/verifier.py` (`ALL_GATES`) and all return
+`GATE_REWARD`. The remaining two are not implemented and are not claimed.
+
+- [X] `no_submit` (`GATE_NO_SUBMIT`)
+- [X] `syntax_broken` (`GATE_SYNTAX_BROKEN`, AST-parses every file under `repo/`)
+- [X] `tests_modified` (`GATE_TESTS_MODIFIED`, forbidden globs + pytest-hook detection)
+- [ ] `private_data_access` — **not implemented**; hidden tests are absent from the sandbox
+  rather than guarded against
+- [X] `sandbox_escape` (`GATE_SANDBOX_ESCAPE`, resolved-path check in `Toolbox._resolve`)
+- [ ] `invalid_patch` — **not implemented**; no patch-apply step exists to fail
+- [ ] `forbidden_path_modified` — covered in practice by `tests_modified`'s glob check, but
+  exists as no separate gate
+- [ ] `malicious_or_prohibited_action` — **not implemented**, and not definable objectively
+  without a classifier; deliberately out of scope
+- [X] `timeout` and `test_count_mismatch` also exist, beyond this list
 
 > Not every failure should hard-zero. Solving the task incorrectly is low correctness, not a
-> safety violation.
+> safety violation. All six implemented gates are safety/validity failures, not wrong answers.
 
-**3.4 Duplicate metric audit** — `docs/reward_component_audit.md`
+**3.4 Duplicate metric audit** — `docs/reward_v2_design.md` §5
+
+(No separate `docs/reward_component_audit.md`; the audit lives inside the design document,
+where each table sits next to the component it audits.)
 
 For each component:
 
-- [ ] What phenomenon does it measure?
-- [ ] What raw data does it need?
-- [ ] Does it overlap another component?
-- [ ] Can the agent manipulate it?
-- [ ] Is it a **training reward** or an **evaluation metric**?
-- [ ] What behaviour change follows from reweighting it?
+- [X] What phenomenon does it measure?
+- [X] What raw data does it need?
+- [X] Does it overlap another component?
+- [X] Can the agent manipulate it?
+- [X] Is it a **training reward** or an **evaluation metric**?
+- [X] What behaviour change follows from reweighting it?
 
 The split between **training reward** and **evaluation metrics** must be explicit. Pass@1, for
 example, can be a primary evaluation metric without being injected into every training step.
+Recorded as a table in §4 of the design document: pass@1, turns-to-solve, tokens-per-solved
+and tool error rate are evaluation metrics and are deliberately absent from the reward.
 
 **3.5 First weight design**
 
-- [ ] Design rationale written first
-- [ ] No components added on impulse
-- [ ] New reward computed offline over existing rollouts
-- [ ] Reward distribution inspected
-- [ ] Check for a mass of all-zero rewards
-- [ ] Check whether all rollouts score nearly the same
-- [ ] Check whether one component dominates the total
+- [X] Design rationale written first (`docs/reward_v2_design.md`, before the code)
+- [X] No components added on impulse (E rejected, C and D deferred, with reasons)
+- [X] New reward computed offline over existing rollouts (`scripts/reward_distribution.py`,
+  162 rows / 53 runs; report at `results/analysis/reward_v2_offline.json`)
+- [X] Reward distribution inspected (per-run and pooled mean/std printed and saved)
+- [X] Check for a mass of all-zero rewards — **found, and larger than expected**: 25 of 28
+  multi-rollout groups have zero spread; 13 of those are all-gated groups no reward can fix
+- [X] Check whether all rollouts score nearly the same — 25 groups score *identically*
+- [X] Check whether one component dominates the total — correctness does by design (0.60 vs
+  0.20); the ceiling on progress's contribution is proven at 0.10 of group spread
+  ($\sigma_{final} = 0.20\sigma_B \le 0.10$), verified numerically
 
 Suggested shape: correctness as the main part; progress secondary; validity a precondition or
 small score; tool behaviour a small adjustment; efficiency the lowest weight; safety gates zero the
 episode.
 
-**3.6 Reward unit tests**
+> **Deviation, stated explicitly.** Validity and tool behaviour are not scored; efficiency is
+> scored at zero. The shape above was not adopted wholesale, and the reason is in the design
+> document: three of those four are either already gates or are incentives to submit early.
 
-- [ ] All tests pass, submission valid
-- [ ] Partial improvement
-- [ ] No improvement
-- [ ] Regression introduced
-- [ ] Syntax error
-- [ ] No submit
-- [ ] Empty patch
-- [ ] Tests modified
-- [ ] Forbidden file modified
-- [ ] Valid tool calls but wrong answer
-- [ ] Correct answer with heavier tool use
+**3.6 Reward unit tests** — `rewards/tests/test_v2.py` (29 tests)
+
+- [X] All tests pass, submission valid (`test_solving_everything_with_perfect_progress_reaches_0_80`)
+- [X] Partial improvement (`test_progress_is_measured_against_the_first_observation_not_zero`)
+- [X] No improvement (`test_the_unmeasured_case_is_distinguished_from_the_zero_case`)
+- [X] Regression introduced
+  (`test_a_negative_correctness_with_perfect_progress_is_still_negative`)
+- [X] Syntax error (`test_a_gated_run_stays_at_the_bottom_of_the_scale`, parametrised)
+- [X] No submit (`test_a_gated_run_stays_at_the_bottom_of_the_scale`, parametrised)
+- [ ] Empty patch — **not covered**; needs the `invalid_patch` gate that does not exist yet
+- [X] Tests modified (`test_a_gated_run_stays_at_the_bottom_of_the_scale`, parametrised)
+- [ ] Forbidden file modified — **not covered**; no separate gate to test
+- [X] Valid tool calls but wrong answer (`test_progress_alone_cannot_reach_a_solved_rollout_no_progress`)
+- [X] Correct answer with heavier tool use (efficiency is absent, so it cannot be penalised;
+  asserted structurally by `test_only_the_shipped_components_carry_weight`)
 - [ ] No double counting between components
 - [ ] Reward always finite (no `NaN` / `Infinity`)
 - [ ] Reward stays within the declared range
@@ -607,6 +666,12 @@ checkpoint, GPU, seed, result folder.
 
 ### Phase 7 — 1.5B GRPO + LoRA training
 
+This is the recommended stage to perform the actual RL experiment. It must remain a small,
+controlled feasibility run before scaling to 3B: use a few training tasks, multiple rollouts per
+task, fixed prompts and harness settings, and only 2–5 update iterations initially. Do not
+increase the task count, model size, or training duration until reward variation, finite losses
+and gradients, checkpoint integrity, and basic evaluation behaviour are acceptable.
+
 **7.1 First formal small run**
 
 - [ ] Few training tasks
@@ -682,11 +747,13 @@ timeout, safety-gate violation, repetitive or inefficient behaviour.
 **8.5 Conclusion rules**
 
 *Improved:*
+
 - [ ] Report the size of the improvement
 - [ ] Report which task types improved
 - [ ] Check for safety or efficiency cost
 
 *No clear change:*
+
 - [ ] Inspect the reward signal
 - [ ] Inspect the number of iterations
 - [ ] Inspect task difficulty
@@ -694,6 +761,7 @@ timeout, safety-gate violation, repetitive or inefficient behaviour.
 - [ ] Report an honest negative result
 
 *Regressed:*
+
 - [ ] Inspect KL
 - [ ] Inspect learning rate
 - [ ] Inspect reward hacking
@@ -765,7 +833,7 @@ External validity only.
 - [ ] Hermes verified to use the same sandbox and verifier
 - [ ] Trajectory format mapping confirmed
 - [ ] Fair comparison keeps model, checkpoint, tasks, reward, verifier, sampling, and budget
-      identical — only the harness changes
+  identical — only the harness changes
 - [ ] If time is short, Hermes moves to Future Work rather than delaying the main evaluation
 
 ---
@@ -809,8 +877,8 @@ harness-specific behaviour; 7B not formally trained; limited statistical power.
 6. Add unit tests and leakage tests for `reward_v2`.
 7. Audit the training code to classify it as full GRPO or GRPO-style.
 8. Fix the 1.5B baseline and experiment configuration.
-9. Collect baseline rollouts, then run the first multi-component reward training run.
-10. Reload the updated checkpoint and complete the fair baseline vs updated 1.5B comparison.
+9. Collect baseline rollouts, then execute the Phase 7 small 1.5B GRPO + LoRA run.
+10. Reload the updated checkpoint and complete the fair baseline vs updated 1.5B comparison in Phase 8.
 
 ---
 
