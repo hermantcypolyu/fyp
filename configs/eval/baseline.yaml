@@ -32,8 +32,15 @@ sampling:
                           # control is sampled the way the policy is during rollouts
   top_p: 1.0
   # k samples per task. pass@1 is the headline; k>1 gives pass@k and a variance estimate.
-  # 8 mirrors num_generations so both arms see the same sampling budget per task.
-  n_samples_per_task: 8
+  #
+  # 4 mirrors `num_generations_per_prompt` in configs/training/grpo_nemo_rl_a5000.yaml so
+  # both arms see the same sampling budget per task, which is what makes pass@k comparable.
+  # This was 8 with a comment saying it "mirrors num_generations" - that was true of the
+  # superseded Unsloth plan, and stale once the NeMo RL config halved the group to 4 for
+  # VRAM. Group size is a within-group statistic, so an 8-rollout control against a
+  # 4-rollout trained arm would report a variance the experiment never had.
+  # Pinned against the protocol by analysis/tests/test_protocol_parity.py.
+  n_samples_per_task: 4
   seed: 42
 
 episode:

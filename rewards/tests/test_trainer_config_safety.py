@@ -163,11 +163,25 @@ def _grpo_section(doc: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _classify(doc: dict[str, Any], grpo: dict[str, Any]) -> str:
-    """Which trainer's schema is this? Returns 'nemo_rl', 'trl', or 'unknown'.
+    """Which trainer's schema is this? Returns 'nemo_rl', 'trl', 'protocol', or 'unknown'.
 
     Scored rather than first-match: a config in transition may carry a few keys from both,
     and the honest answer is whichever it looks more like - or 'unknown' on a tie, which
     fails and asks a human.
+
+    'protocol' is not a trainer. `configs/training/protocol_1p5b.yaml` records the settings
+    the *two arms share* - model, LoRA shape, learning rate, group size, sampling - and is
+    deliberately trainer-neutral, because it has to describe the baseline (which loads no
+    trainer) as well as the trained arm. It has a `grpo` section because GRPO's settings are
+    part of the protocol, not because it configures a GRPO implementation. Classifying it as
+    a trainer would be a category error, and the fix is to say so here rather than to move
+    the file, disguise its keys, or mark it `superseded` when it is the current protocol.
+
+    The marker is `meta.kind: arm_independent_protocol`, an explicit declaration rather than
+    an inference from the prose in `meta.role` (which describes the file's purpose and is
+    free to be rewritten). Nothing else is accepted: a config claiming to be a protocol while
+    also carrying a decisive trainer fingerprint is scored as that trainer, so this cannot be
+    used to smuggle an unaudited trainer config past the checks below.
     """
     keys = set(grpo)
     nemo_score = len(keys & NEMO_RL_MARKERS) + len(set(doc) & NEMO_RL_TOP_LEVEL)
@@ -176,7 +190,17 @@ def _classify(doc: dict[str, Any], grpo: dict[str, Any]) -> str:
         return "nemo_rl"
     if trl_score > nemo_score:
         return "trl"
+    if nemo_score == 0 and trl_score == 0 and _is_shared_protocol(doc):
+        return "protocol"
     return "unknown"
+
+
+def _is_shared_protocol(doc: dict[str, Any]) -> bool:
+    """True when a file declares itself the arm-independent protocol (`meta.kind`)."""
+    meta = doc.get("meta")
+    if not isinstance(meta, dict):
+        return False
+    return meta.get("kind") == "arm_independent_protocol"
 
 
 def _status(doc: dict[str, Any]) -> str:
@@ -255,9 +279,14 @@ def test_every_active_config_targets_the_chosen_trainer(entry: dict[str, Any]):
     the ones we audited. Mark it `status: superseded` with a `superseded_by` pointing at its
     replacement, which keeps its reasoning - the VRAM levers and the integration-risk notes
     survive a change of trainer - without letting it be mistaken for live configuration.
+
+    A file classified `protocol` is exempt because it configures no trainer at all: it is the
+    arm-independent half of the settings, and the baseline arm it also describes loads no
+    trainer. `_classify` only reaches that verdict when the file carries zero trainer
+    fingerprints, so this cannot be used to exempt a real trainer config.
     """
     trainer = entry["trainer"]
-    if trainer == CHOSEN_TRAINER:
+    if trainer in (CHOSEN_TRAINER, "protocol"):
         return
 
     if trainer == "unknown":
@@ -295,6 +324,61 @@ def test_a_superseded_config_names_its_replacement(entry: dict[str, Any]):
         f"whose replacement is missing means the checks in this file are running against "
         f"nothing at all."
     )
+
+
+PROTOCOL_CONFIGS = [c for c in CONFIGS if c["trainer"] == "protocol"]
+
+
+def test_the_exemption_for_a_shared_protocol_cannot_hide_a_trainer_config():
+    """`protocol` is a narrow escape from the classification, and must stay narrow.
+
+    `test_every_active_config_targets_the_chosen_trainer` lets a `protocol`-classified file
+    pass. That is only safe while the classification requires *zero* trainer fingerprints, so
+    a config cannot declare itself a protocol to avoid the hazard assertions. If this test
+    fails, someone relaxed `_classify` and the provenance gate has a hole.
+    """
+    for entry in PROTOCOL_CONFIGS:
+        doc, grpo = entry["doc"], entry["grpo"]
+        nemo_hits = (set(grpo) & NEMO_RL_MARKERS) | (set(doc) & NEMO_RL_TOP_LEVEL)
+        trl_hits = set(grpo) & TRL_MARKERS
+        assert not nemo_hits, (
+            f"{entry['path']}: declares `meta.kind: arm_independent_protocol` but carries "
+            f"NeMo RL keys {sorted(nemo_hits)}. It is a trainer config and must be audited "
+            f"as one; delete the marker."
+        )
+        assert not trl_hits, (
+            f"{entry['path']}: declares `meta.kind: arm_independent_protocol` but carries "
+            f"TRL keys {sorted(trl_hits)}. It is a trainer config and must be audited as "
+            f"one; delete the marker."
+        )
+
+
+def test_a_file_claiming_to_be_a_protocol_but_holding_a_trainer_key_is_classified_by_its_keys():
+    """The exemption is decided by content, not by the label alone.
+
+    Stated as arithmetic on two synthetic docs so the rule is visible without depending on
+    any file on disk.
+    """
+    protocol_like = {"meta": {"kind": "arm_independent_protocol"}, "grpo": {"clip_epsilon": 0.28}}
+    assert _classify(protocol_like, protocol_like["grpo"]) == "protocol"
+
+    also_a_trl_config = {
+        "meta": {"kind": "arm_independent_protocol"},
+        "grpo": {"clip_epsilon": 0.28, "num_generations": 4},
+    }
+    assert _classify(also_a_trl_config, also_a_trl_config["grpo"]) == "trl"
+
+    also_a_nemo_config = {
+        "meta": {"kind": "arm_independent_protocol"},
+        "grpo": {"adv_estimator": "group"},
+    }
+    assert _classify(also_a_nemo_config, also_a_nemo_config["grpo"]) == "nemo_rl"
+
+
+def test_unlabelled_grpo_shaped_file_is_still_unknown():
+    """Removing the marker must bring the failure back, not silently pass."""
+    anonymous = {"meta": {"name": "x"}, "grpo": {"clip_epsilon": 0.28}}
+    assert _classify(anonymous, anonymous["grpo"]) == "unknown"
 
 
 # --- NeMo RL config assertions -----------------------------------------------------------

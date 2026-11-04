@@ -642,51 +642,112 @@ identity.
 
 ### Phase 5 — Fixed experiment protocol
 
-**5.1 Record the 1.5B configuration**
+**Status: 5.1 and 5.2 complete and test-enforced; 5.3 written but never exercised.**
+The protocol is `configs/training/protocol_1p5b.yaml` (hashed into every manifest), the
+manifest tool is `scripts/run_manifest.py`, and the machine rules are
+[docs/PHASE5_GPU_RESOURCE_RULES.md](PHASE5_GPU_RESOURCE_RULES.md). Narrative:
+[docs/PHASE5_FIXED_PROTOCOL.md](PHASE5_FIXED_PROTOCOL.md). Nothing here has been executed — the
+protocol is internally consistent and pinned by tests, not validated on hardware.
 
-- [ ] Base model name and revision
-- [ ] LoRA rank
-- [ ] LoRA alpha
-- [ ] Target modules
-- [ ] Learning rate
-- [ ] Group size
-- [ ] Number of tasks
-- [ ] Rollouts per task
-- [ ] Temperature
-- [ ] Top-p
-- [ ] Max turns
-- [ ] Max tool calls
-- [ ] Max sequence length
-- [ ] Gradient clipping
-- [ ] KL coefficient
-- [ ] Clip epsilon
-- [ ] Random seeds
-- [ ] Training iterations
-- [ ] Checkpoint schedule
+Each `[X]` below cites where the value lives. Three items are `[ ]` **on purpose**: they are
+values nobody has decided, recorded as `null` and listed in every manifest's `unresolved` field
+rather than filled with a plausible number.
+
+**5.1 Record the 1.5B configuration** — all values in `configs/training/protocol_1p5b.yaml`,
+asserted present by `analysis/tests/test_protocol_parity.py::test_protocol_declares_every_phase_5_1_setting`.
+
+- [X] Base model name — `model.name: Qwen/Qwen2.5-Coder-1.5B-Instruct`, asserted identical to
+  both arms (`test_protocol_names_the_model_the_arms_actually_load`)
+- [ ] Base model **revision** — `model.revision: null`. A HF repo name resolves to whatever is
+  current, so two runs could differ with every other field identical. Deliberately unfilled;
+  `docs/PHASE5_FIXED_PROTOCOL.md` §2.5 gives the command to resolve a sha. **Blocks the first
+  real run.**
+- [X] LoRA rank — `lora.r: 32`
+- [X] LoRA alpha — `lora.lora_alpha: 64` (`2 × r`, asserted)
+- [X] Target modules — all seven (`q/k/v/o/gate/up/down`), pinned by
+  `test_lora_targets_cover_both_projections_of_every_layer`
+- [X] Learning rate — `training.learning_rate: 1.0e-5`
+- [X] Group size — `rollouts.group_size: 4`, equal to `num_generations_per_prompt`
+  (`test_group_size_matches_the_trainer_config`)
+- [X] Number of tasks — `rollouts.n_tasks: 4`
+- [X] Rollouts per task — `rollouts.rollouts_per_task: 4`
+- [X] Temperature — `sampling.temperature: 1.0`, asserted equal to the baseline
+  (`test_sampling_temperature_is_identical_in_both_arms`)
+- [ ] **Top-p** — `sampling.top_p: null`. The baseline sets `1.0`; neither trainer config sets
+  it. Copying `1.0` would assert the trainer defaults to it, which is not the same as being
+  configured to it. A sampler difference between arms is the confound this file exists to
+  prevent, so it stays visible. **Must be set in both arms before the baseline.**
+- [X] Max turns — `episode.max_turns: from_task_yaml`
+- [X] Max tool calls — `episode.max_tool_calls: from_task_yaml`
+- [X] Max sequence length — `model.max_seq_length: 8192`, asserted equal to the baseline
+- [X] Gradient clipping — `training.max_grad_norm: 1.0`
+- [ ] **KL coefficient** — `grpo.kl_coefficient: null`. `0.0` would claim a KL term exists and
+  is switched off; `docs/PHASE4_GRPO_AUDIT.md` found no reference policy, so no term exists.
+  `null` means *absent* (`test_kl_absence_is_consistent_with_the_phase_4_audit`). **Not a gap to
+  close — a fact to keep.**
+- [X] Clip epsilon — `grpo.clip_epsilon: 0.28` (from `grpo_unsloth_a5000.yaml:111` `epsilon_high`)
+- [X] Random seeds — `sampling.seed: 42`, `lora.random_state: 42`
+- [X] Training iterations — `training.training_iterations: 5`
+- [X] Checkpoint schedule — `training.checkpoint_every_n_iterations: 1`
+
+*Correction made while writing this up:* `configs/eval/baseline.yaml` had
+`n_samples_per_task: 8` with a comment saying it "mirrors `num_generations`". That was true of
+the superseded Unsloth plan and stale once the NeMo RL config halved the group to 4 for VRAM,
+so the control would have sampled twice as many rollouts as the trained arm used. Changed to
+`4` and pinned by `test_baseline_samples_the_same_number_as_a_group`.
 
 **5.2 Run manifest** — `run_id`, date, git commit, model, dataset version, reward version,
 trajectory schema version, training config hash, evaluation config hash, input checkpoint, output
-checkpoint, GPU, seed, result folder.
+checkpoint, GPU, seed, result folder. Implemented in `scripts/run_manifest.py`; the 14-item
+mapping is asserted by
+`analysis/tests/test_run_manifest.py::test_manifest_has_every_field_phase_5_2_requires`.
 
-- [ ] A manifest is generated per run
-- [ ] Config hash recorded
-- [ ] Checkpoint hash recorded
-- [ ] GPU model recorded
-- [ ] Start and end time recorded
-- [ ] Failure reason recorded
-- [ ] Old results never manually overwritten
+- [X] A manifest is generated per run — `uv run python scripts/run_manifest.py --arm <a>
+  --run-id <id> -o <dir>`; written *before* the run, since it records identity, not outcome
+- [X] Config hash recorded — `arm_config.sha256` and `protocol.file.sha256`
+  (`test_config_hashes_change_when_the_config_changes`)
+- [X] Checkpoint hash recorded — `checkpoints.input` / `.output`, each `{spec, local, sha256}`
+- [X] GPU model recorded — `gpu: {present, devices, cuda_visible_devices, reason}`; a CPU-only
+  box records `present: false` rather than omitting the field
+  (`test_no_gpu_is_recorded_as_absent_not_omitted`)
+- [X] Start and end time recorded — `timing.started_at` at write, `finished_at` / `duration_s`
+  on `--finish` (`test_finish_records_the_end_time_and_failure_reason`)
+- [X] Failure reason recorded — `outcome: {status, failure_reason}` via `--finish failed "..."`;
+  the status starts `planned` and closing a run cannot alter its identity
+  (`test_finish_does_not_alter_the_identity_of_the_run`)
+- [X] Old results never manually overwritten — `write_manifest` raises `FileExistsError`
+  without `--force`, and `--force` **renames** the old file to
+  `manifest.superseded-<UTC>.json` rather than deleting it
+  (`test_force_preserves_the_superseded_manifest_rather_than_deleting_it`)
 
-**5.3 GPU resource rules**
+Also enforced: `--arm training --split heldout` exits 2 and writes nothing, so a run intending
+to train on the sealed split cannot even be declared
+(`test_cli_refuses_to_manifest_training_on_the_heldout_split`).
 
-- [ ] Use GPU 0 only
-- [ ] Every command sets `CUDA_VISIBLE_DEVICES=0` explicitly
-- [ ] GPU 1 processes belonging to other users are never touched
-- [ ] vLLM stopped after rollouts
-- [ ] GPU freed after training
-- [ ] `nvidia-smi` checked before leaving
-- [ ] No idle server holding VRAM long-term
-- [ ] Server PID and log path recorded
-- [ ] Reasonable timeouts set
+**5.3 GPU resource rules** — written in
+[docs/PHASE5_GPU_RESOURCE_RULES.md](PHASE5_GPU_RESOURCE_RULES.md), one section per rule with the
+command that enforces it and the manifest field that records it. **None of these has been
+executed: this machine has no GPU, so every item is a rule for the training box, not a completed
+action.** They are checked here only insofar as the manifest can record them.
+
+- [X] Use GPU 0 only — stated in the rulebook §1 and pinned in the protocol as
+  `hardware.cuda_visible_devices: "0"` (`test_only_one_gpu_device_is_ever_named`)
+- [X] Every command sets `CUDA_VISIBLE_DEVICES=0` explicitly — rulebook §2, including why the
+  variable *remaps* rather than filters indices; recorded as `gpu.cuda_visible_devices`
+- [X] GPU 1 processes belonging to other users are never touched — rulebook §3, restating the
+  "Do not do now" entry in this document; enforced by policy, not by a check
+- [X] vLLM stopped after rollouts — rulebook §4 (`kill "$(cat logs/vllm.pid)"`)
+- [X] GPU freed after training — rulebook §5 (`--query-compute-apps`)
+- [X] `nvidia-smi` checked before leaving — rulebook §6, with the leaving condition stated
+- [X] No idle server holding VRAM long-term — rulebook §7
+- [X] Server PID and log path recorded — rulebook §8; `artifacts.server_pid` / `artifacts.log`
+- [X] Reasonable timeouts set — rulebook §9, including that `timeout` exits 124 so the guard
+  firing is distinguishable from a run failing on its own
+
+The `[X]`s in 5.3 mean *written down and wired to a manifest field*, not *performed*. That
+distinction is the whole point of the section: no assertion here can catch a forgotten vLLM
+server, which is why the rules are prose and the manifest is what makes them auditable after the
+fact.
 
 ---
 

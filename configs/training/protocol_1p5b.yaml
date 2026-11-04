@@ -1,0 +1,193 @@
+# Fixed experiment protocol - 1.5B arm. Phase 5.1.
+#
+# ############################################################################
+# ##  STATUS: NEVER EXECUTED.                                               ##
+# ##  This file freezes the settings the experiment will use. No run has    ##
+# ##  read it. It exists so that the baseline arm, the training arm and the  ##
+# ##  final report cannot quietly disagree about what "the experiment" was.  ##
+# ############################################################################
+#
+# WHY THIS FILE EXISTS
+#
+# AGENT_BUILD_SPEC 5.8 and docs/CURRENT_PROJECT_STATUS.md 4.3 both require that the
+# harness, reward, model and dataset are not changed at the same time. A configuration
+# that is edited between the control arm and the trained arm makes "RL improved the
+# score" unattributable - any difference could be the sampler, the budget, or the
+# checkpoint schedule. So the values live in exactly one place, are hashed into every
+# run manifest (scripts/run_manifest.py), and are asserted against the arm configs by
+# tests so that an edit which breaks the parity fails the build instead of the result.
+#
+# PROVENANCE VOCABULARY - every value below carries one of four tags:
+#
+#   GROUNDED    copied from a file or source in this repository, named in the comment
+#   CHOSEN      a deliberate choice with no upstream authority; the comment says why
+#   ASSUMPTION  a value we expect to be wrong and must measure; the comment says what
+#   null        NOT YET DECIDED. A null is a visible gap, not a silent default.
+#
+# Do not fill a null with a plausible number to make a table look complete. The
+# protocol is fixed only where it is known; where it is not, this file says so, and
+# scripts/run_manifest.py records the null rather than inventing a value.
+
+meta:
+  name: protocol_1p5b
+  status: NEVER_EXECUTED
+  # Explicit, machine-readable marker. rewards/tests/test_trainer_config_safety.py scans
+  # every YAML with a `grpo` section and asks "whose trainer schema is this?" - a question
+  # that has no answer for this file, because it configures no trainer. This key is that
+  # answer, and it is a declaration rather than an inference from prose.
+  kind: arm_independent_protocol
+  role: the fixed settings shared by the control arm and the trained arm
+  model_tier: 1.5B
+  written: 2026-11-04
+  # The model progression is fixed (CURRENT_PROJECT_STATUS 4.2): 1.5B is the primary
+  # working model and 3B is gated on 1.5B success. This protocol describes the 1.5B arm
+  # only; a 3B arm would need its own file with its own hashes, not an edit to this one.
+
+# --------------------------------------------------------------------------- model
+model:
+  # GROUNDED: configs/eval/baseline.yaml `model.name` and
+  # configs/training/grpo_nemo_rl_a5000.yaml `policy.model_name` already agree, and this
+  # is the model the whole pipeline has been built and smoke-tested against.
+  name: Qwen/Qwen2.5-Coder-1.5B-Instruct
+  # ASSUMPTION - NOT PINNED. A Hugging Face repo name resolves to whatever the current
+  # revision is; two runs a week apart can load different weights under the same string
+  # and no field in a trace would differ. Resolve a commit sha before the first real run:
+  #     hf api models/Qwen/Qwen2.5-Coder-1.5B-Instruct --expand sha
+  # and put it here. Until then every run manifest records `revision: null`, which is an
+  # honest "unpinned", not a claim that the weights are fixed.
+  revision: null
+  # GROUNDED: configs/eval/baseline.yaml matches this so the control arm is 4-bit too;
+  # the comparison is then RL-vs-no-RL and not 4bit-vs-16bit.
+  load_in_4bit: true
+  full_finetuning: false          # GROUNDED: grpo_unsloth_a5000.yaml - must be false for LoRA
+  max_seq_length: 8192            # GROUNDED: both arm configs agree. ASSUMPTION as a
+                                  # VRAM figure - the source value was measured on an
+                                  # H100, and this is the first OOM lever.
+
+# --------------------------------------------------------------------------- LoRA
+# GRPO/LoRA shape. source: configs/training/grpo_unsloth_a5000.yaml (upstream notebook [S3]).
+lora:
+  r: 32
+  lora_alpha: 64                  # GROUNDED: upstream uses lora_alpha = r * 2
+  # GROUNDED: verbatim from the upstream LoRA cell, all seven attention + MLP projections.
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  random_state: 42
+
+# --------------------------------------------------------------------------- optimisation
+training:
+  learning_rate: 1.0e-5          # GROUNDED: upstream GRPOConfig
+  weight_decay: 0.001             # GROUNDED
+  warmup_ratio: 0.0               # GROUNDED
+  lr_scheduler_type: linear       # GROUNDED
+  optim: adamw_8bit               # GROUNDED
+  # CLI-entropy stability. GROUNDED: F3/F4 recorded runs and grpo_unsloth_a5000.yaml use
+  # the same bound; the F4 run's gradient norm was 0.3078 against it, so it did not bind.
+  max_grad_norm: 1.0
+  per_device_train_batch_size: 1  # GROUNDED
+  gradient_accumulation_steps: 16 # CHOSEN: upstream uses 64 on an H100; 16 keeps a step
+                                  # short enough to debug. VRAM-neutral if raised.
+  # CHOSEN - ITERATION BUDGET. Phase 7 asks for 2-5 update iterations initially, so the
+  # ceiling is set there rather than at the upstream tutorial's 100 steps. A run that
+  # exceeds this is not this protocol's run.
+  training_iterations: 5
+  # CHOSEN - CHECKPOINT SCHEDULE. Save after every step at this scale: five checkpoints
+  # of a LoRA adapter are small, and the alternative (save at the end) loses the only
+  # evidence of intermediate behaviour if the last step diverges.
+  checkpoint_every_n_iterations: 1
+
+# --------------------------------------------------------------------------- rollouts
+# One GRPO group = one task sampled k times. Group size is what makes the group's
+# standard deviation meaningful, and it is the setting most likely to meet VRAM.
+rollouts:
+  # GROUNDED: grpo_nemo_rl_a5000.yaml `num_generations_per_prompt`, already halved from 8
+  # for a 24 GB card. This is the value the trainer config would actually use.
+  group_size: 4
+  # CHOSEN - TASK COUNT. Phase 7 says "few training tasks". Four prompts per step x 4
+  # rollouts = 16 episodes per step, which is the largest step we have any evidence the
+  # box can finish. A larger task count is a later experiment, not this protocol.
+  n_tasks: 4
+  # DERIVED, recorded so it cannot drift: rollouts per task IS group size. Listed
+  # separately because Phase 5.1 asks for both, and because they are the same number
+  # for a reason (a task is sampled exactly once as a prompt per step).
+  rollouts_per_task: 4
+
+# --------------------------------------------------------------------------- sampling
+sampling:
+  temperature: 1.0                # GROUNDED: both arm configs agree
+  # null - NOT DECIDED. Neither arm config sets top_p; the trainer's default would apply
+  # silently. Fix this before the baseline, because a sampler difference between the
+  # arms is exactly the confound this file exists to prevent.
+  top_p: null
+  # GROUNDED: configs/eval/baseline.yaml `sampling.seed`.
+  seed: 42
+
+# --------------------------------------------------------------------------- episode budget
+episode:
+  # From each task's task.yaml (constraints.max_turns / max_tool_calls), not set here.
+  # GROUNDED as a policy: configs/eval/baseline.yaml already does this, so a task's own
+  # budget stays authoritative and the two arms cannot diverge. Recorded per rollout in
+  # the trace's `budgets` block.
+  max_turns: from_task_yaml
+  max_tool_calls: from_task_yaml
+
+# --------------------------------------------------------------------------- GRPO objective
+grpo:
+  # GRPO's own advantage is (r - mean_group) / (std_group + eps): sign-agnostic and safe
+  # for the [-1, 1] reward of ADR 0006. GROUNDED: nemo_rl GRPOAdvantageEstimator.
+  advantage_estimator: group_relative
+  # GROUNDED: upstream GRPOConfig `epsilon_high`. The trainer's lower clip is the
+  # symmetric default of the same value.
+  clip_epsilon: 0.28
+  # NOT APPLICABLE, and recorded anyway because Phase 5.1 asks for it. The controlled
+  # update has NO reference model and therefore no KL term (docs/PHASE4_GRPO_AUDIT.md
+  # 4.2). A null here means "absent", not "zero": writing 0.0 would claim a KL term
+  # exists and is switched off. If a reference policy is added later this becomes a
+  # number and the audit must be re-run.
+  kl_coefficient: null
+  # GROUNDED: grpo_nemo_rl_a5000.yaml truncation policy.
+  #
+  # Named `drop_` rather than the trainer's `mask_truncated_completions` on purpose. This
+  # file is an arm-independent protocol, not a trainer config, and the trainer's name for
+  # this setting is one of TRL's schema fingerprints - carrying it here made
+  # rewards/tests/test_trainer_config_safety.py classify this file as a TRL config and fail.
+  # The test is right: a protocol file that looks like a trainer config is ambiguous, and
+  # the trainer already covers the real hazard. Same meaning, no false signal.
+  drop_truncated_completions: true
+
+# --------------------------------------------------------------------------- reward
+# The reward is part of the protocol because a reward change between arms is a confound.
+reward:
+  # Which reward the *runtime* scores with. rewards/compose.py (reward_v1) is what
+  # envs/coding_env/verifier.py imports; rewards/v2.py is not called by any live path.
+  live: reward_v1
+  # Which reward the analysis reports. reward_v2 is computed offline over recorded
+  # rollouts by scripts/reward_distribution.py and does not change what the agent sees.
+  analysed: reward_v2
+  # GROUNDED: ADR 0006. Recorded so a run manifest can detect a reward-range change.
+  range: [-1.0, 1.0]
+
+# --------------------------------------------------------------------------- data
+data:
+  # GROUNDED: docs/heldout_seal.md. The held-out split is sealed and is not used to
+  # train, to select a checkpoint, or to sanity-check the harness. The trace hash is
+  # checked by `make seal-check`; this line records which side of the seal a run is on.
+  split: train
+  validation_from: train          # GROUNDED: grpo_nemo_rl_a5000.yaml - checkpoint
+                                  # selection uses a slice of train ONLY
+  heldout_enabled: false          # flip once, at the very end (configs/eval/baseline.yaml)
+
+# --------------------------------------------------------------------------- hardware
+hardware:
+  # GROUNDED: docs/vram_notes.md, configs/training/grpo_nemo_rl_a5000.yaml. The device
+  # actually used is recorded per run by scripts/run_manifest.py from nvidia-smi; this
+  # is the target, and a mismatch is reported rather than assumed away.
+  target_gpu: "RTX A5000 (24 GB)" # the F4 run recorded an A6000; see docs/PHASE_F4_CONTROLLED_UPDATE.md
+  # Phase 5.3: the experiment uses one device, and every command names it explicitly.
+  cuda_visible_devices: "0"
