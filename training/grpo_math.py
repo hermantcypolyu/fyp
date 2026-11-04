@@ -2,9 +2,23 @@
 
 `scripts/run_optimizer_smoke.py` needs a GPU, a 1.5B model and ~20 GB of VRAM to
 import, which means none of its arithmetic could be executed in CI. The parts
-that are pure Python - advantage normalisation and the clipped surrogate
-objective - are therefore defined here and imported back by the script, so the
-numbers that were tested are the numbers that run.
+that are pure Python are therefore defined here and unit-tested without torch.
+
+Two distinct things live in this module, and they are not the same kind of code:
+
+* `group_advantages` is **shared production code**. `scripts/run_optimizer_smoke.py`
+  imports and calls it, so testing it tests the code that runs.
+* `policy_ratio`, `clipped_surrogate` and `policy_loss` are **torch-free scalar
+  reference implementations**. The GPU script still computes the ratio, the
+  clipping, the surrogate and the loss with vectorised torch operations; it does
+  not call these functions. They exist so the intended mathematics can be tested
+  on a CPU.
+
+Testing a scalar reference implementation is not the same as testing the
+vectorised one, and the unit tests here do **not** establish that the two are
+numerically equivalent. A future equivalence test should feed identical inputs
+to both the scalar reference functions and the torch path and compare the
+outputs; that requires an environment with PyTorch installed.
 
 Nothing in this module imports torch.
 """
@@ -32,6 +46,17 @@ class DegenerateGroupError(ValueError):
     advantage, but no gradient at all. Silently returning zeros would produce a
     loss with no gradient and the run would look like it trained. This is raised
     instead.
+
+    Current behaviour in the smoke script: `group_advantages` raises this, and
+    `compute_advantages` converts it into a `RuntimeError`. The optimizer smoke
+    processes exactly one group, so the whole run therefore **fails fast**. It
+    does **not** skip the degenerate group and continue, and it does not record a
+    skipped-group status.
+
+    A future multi-group trainer should, for each group: catch the zero-variance
+    condition, record the group as skipped due to no learning signal, avoid
+    calling `optimizer.step()` for it, and continue to the next group. That
+    behaviour does not exist yet.
     """
 
 
@@ -47,7 +72,9 @@ def group_advantages(rewards: Sequence[float]) -> tuple[list[float], float, floa
     non-finite reward, or has zero spread.
     """
     if len(rewards) < 2:
-        raise DegenerateGroupError(f"A GRPO group needs at least two members to have a mean; got {len(rewards)}.")
+        raise DegenerateGroupError(
+            f"A GRPO group needs at least two members for a group-relative comparison; got {len(rewards)}."
+        )
 
     for index, reward in enumerate(rewards):
         if isinstance(reward, bool) or not isinstance(reward, (int, float)):

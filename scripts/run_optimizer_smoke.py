@@ -403,9 +403,19 @@ def main() -> None:
 
             log_ratio = current_log_probs - old_log_probs
 
-            # Protect the smoke run from overflow while preserving the
-            # PPO/GRPO clipping calculation. The clamp and objective live in
-            # training/grpo_math.py so they can be tested without a GPU.
+            # The clamp below exists to protect this run from overflow while
+            # preserving the PPO/GRPO clipping calculation. The ratio,
+            # clipping, surrogate and token-weighted loss are implemented here
+            # with vectorised torch operations; training/grpo_math.py holds
+            # torch-free scalar reference versions of the same formulas that
+            # the CPU unit tests exercise. Only `group_advantages` is shared
+            # code that this script actually calls.
+            #
+            # The scalar reference tests therefore assert the intended
+            # mathematical behaviour, not that this vectorised implementation is
+            # numerically identical to it. An equivalence test comparing scalar
+            # reference outputs against these torch outputs on identical inputs
+            # is not yet written and would require an environment with PyTorch.
             ratio = torch.exp(torch.clamp(log_ratio, min=-20.0, max=20.0))
 
             clipped_ratio = torch.clamp(

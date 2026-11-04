@@ -39,8 +39,32 @@ ModuleNotFoundError: No module named 'torch'
 
 So *no part* of the GRPO arithmetic could be imported, let alone tested, outside the GPU
 box. The group math had only ever been verified by running it on real hardware. Phase 4
-moved the torch-free arithmetic into `training/grpo_math.py`, which the script now imports,
-so the tested code and the executed code are the same code.
+moved the torch-free arithmetic into `training/grpo_math.py` and the script now imports
+from it.
+
+That extraction covers **two different kinds of code**, and it matters which is which:
+
+1. **Shared production code — `group_advantages`.** `scripts/run_optimizer_smoke.py`
+   imports and calls it. Unit-testing it therefore tests the code that actually runs, and
+   the anchor test replays the recorded metrics from a real GPU run against it.
+2. **Torch-free scalar reference implementations — `policy_ratio`, `clipped_surrogate`,
+   `policy_loss`.** The GPU script still computes the ratio, the clipping, the surrogate
+   and the token-weighted loss with vectorised torch operations. It does **not** call these
+   functions. They exist so the intended mathematics can be asserted on a CPU.
+
+Testing a scalar reference implementation is not the same thing as testing the vectorised
+one. The tests below establish that these formulas behave as intended; they do **not**
+establish that the two implementations agree numerically. An equivalence test — feeding
+identical inputs to the scalar reference functions and to the torch path and comparing the
+outputs — is not yet written and would require a PyTorch-enabled environment.
+
+**Zero-variance groups.** `group_advantages` raises `DegenerateGroupError` when every
+member of a group receives the same reward, and `compute_advantages` in the script converts
+that into a `RuntimeError`. Because the optimizer smoke processes exactly one group, the
+current behaviour is **fail fast**: the run stops. It does **not** skip the degenerate group
+and continue, and it does not record a skipped-group status. A future multi-group trainer
+should catch the condition, record the group as skipped for having no learning signal, avoid
+calling `optimizer.step()` for it, and move on to the next group. None of that exists today.
 
 ## §4.2 GRPO core — item by item
 
@@ -55,8 +79,8 @@ so the tested code and the executed code are the same code.
 | Prompt tokens masked | ✅ | logits taken from `prompt_length - 1`; prompt positions never appear in the loss |
 | Padding tokens masked | ⚠️ **by construction** | each turn is scored as a single unpadded sequence of `len(prompt)+len(generation)`; there is no batch padding to mask, and no batched path exists yet |
 | Old-policy probability available | ✅ | `generation_log_probs` captured at rollout time by NeMo Gym |
-| Policy probability ratio computed | ✅ | `policy_ratio`; `exp(current - old)` |
-| Clipped policy objective present | ✅ | `clipped_surrogate` = `min(r*A, clip(r)*A)`, one-sided as PPO specifies |
+| Policy probability ratio computed | ✅ | script: `torch.exp(clamp(current - old, -20, 20))`; scalar reference: `policy_ratio` |
+| Clipped policy objective present | ✅ | script: `torch.minimum(r*A, clamp(r, 1±e)*A)`; scalar reference: `clipped_surrogate`, one-sided as PPO specifies |
 | **Reference-policy KL regularisation present** | ❌ **ABSENT** | no reference model is loaded; `grep -n "kl\|ref_model"` over the script returns nothing; the metrics file has no `kl` key |
 | KL direction correct | ❌ **not applicable** | nothing to check |
 | Loss applied only to generated tokens | ✅ | only `TrainableTurn`s contribute; tool outputs are `context_item_count` |
@@ -71,13 +95,20 @@ so the tested code and the executed code are the same code.
 
 ## The two absent items
 
-Loading a frozen reference copy of a 1.5B model alongside the policy is the memory the
-A5000 does not have: the executed run already peaked at **19.9-22.9 GB of 24 GB**. KL
-regularisation was deferred for that reason, not overlooked.
+KL regularisation is absent because the controlled smoke implementation loads no reference
+model. The historical reason is the 24 GB A5000 budget this work was originally carried out
+under: that card was already near its limit, with the executed run peaking at **19.9-22.9 GB
+of 24 GB**. On that hardware a frozen reference copy of a 1.5B model alongside the policy
+would not have fit, so KL was deferred rather than overlooked.
 
-`training/tests/test_grpo_math.py::test_there_is_no_kl_term_to_test` pins the absence with
-`inspect.signature`, so the checklist item cannot be ticked later without the test failing
-and forcing a real test to be written.
+That budget is **historical experiment context, not the current limit.** The current machine
+has an **RTX A6000 with ~48 GB of VRAM**, so a reference policy is not impossible here and
+should not be described as such. Nor has it been implemented: it remains future design work.
+
+`training/tests/test_grpo_math.py::test_scalar_reference_loss_has_no_kl_term` is a
+structural guard on the scalar reference module only — it checks that `policy_loss` takes no
+KL input and that `training.grpo_math` defines no KL helper. It is **not** a repository-wide
+proof that no KL code exists; that finding rests on source inspection of the script.
 
 This is a substantive limitation, not a technicality. Without KL, nothing anchors the policy
 to the starting distribution over many steps. One step is therefore safe — the checkpoint is
@@ -93,7 +124,14 @@ some form of *"controlled, one-step GRPO-style LoRA update"*. A repository-wide 
 `CURRENT_PROJECT_STATUS.md`, where those words appear only as the *test for when* the name
 would become legitimate.
 
-Because the full GRPO objective is **not** verified (no KL), the operative rule is:
+The GRPO objective proposed for this project includes reference-policy KL regularisation.
+The current controlled smoke implementation omits the reference model and KL term, so it
+does not yet match the proposed full training objective.
+
+KL absence is one reason for the cautious name, not the only one. The others are: it is a
+single controlled optimizer step; task coverage is limited; there is no multi-step training
+run; there is no completed before-and-after evaluation; and there is no demonstrated
+improvement in coding performance. The operative naming rule is therefore:
 
 > Call it "controlled, one-step GRPO-style LoRA update" — because KL regularisation is
 > absent.
@@ -108,15 +146,18 @@ checkpoint plumbing only; it does **not** show improved coding performance."*
 ```python
 def test_reproduces_the_recorded_smoke_run_exactly():
     advantages, mean, std = group_advantages([0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0])
-    assert mean == -0.125
-    assert std == 0.33071891388307384
-    assert advantages[0] == 0.37796333015554007
-    assert advantages[4] == -2.6457433110887805
+    assert mean == pytest.approx(-0.125, rel=1e-12, abs=1e-12)
+    assert std == pytest.approx(0.33071891388307384, rel=1e-12, abs=1e-12)
+    assert advantages[0] == pytest.approx(0.37796333015554007, rel=1e-12, abs=1e-12)
+    assert advantages[4] == pytest.approx(-2.6457433110887805, rel=1e-12, abs=1e-12)
 ```
 
 Every literal was read from `results/raw/rl_smoke_1step/training_metrics.json`, produced by
-a real RTX A6000 run. The refactored code reproduces it bit for bit, which is the evidence
-that extracting the math did not change it.
+a real RTX A6000 run. The refactored code reproduces it to within `1e-12` relative and
+absolute. That is an assertion of **numerical equivalence**, not binary identity:
+floating-point arithmetic does not guarantee bit-for-bit agreement across platforms, builds
+or vectorisation widths, so claiming a one-bit change would fail the test would overstate
+what it shows.
 
 | §4.4 item | test |
 |---|---|
@@ -124,7 +165,7 @@ that extracting the math did not change it.
 | High-reward rollout → positive advantage | `test_high_reward_rollout_gets_positive_advantage` |
 | Low-reward rollout → negative advantage | `test_low_reward_rollout_gets_negative_advantage`, `test_the_lowest_reward_always_gets_the_lowest_advantage` |
 | Clipping actually bounds the ratio | `test_clipping_limits_the_reward_for_improving_too_far`, `test_clipping_does_not_apply_to_the_disadvantageous_direction`, `test_inside_the_trust_region_the_objective_is_not_clipped` |
-| Rising KL is reflected in the loss | ❌ **cannot be tested — no KL exists**; `test_there_is_no_kl_term_to_test` pins the gap |
+| Rising KL is reflected in the loss | ❌ **cannot be tested — no KL exists**; `test_scalar_reference_loss_has_no_kl_term` guards the scalar reference module only |
 | Prompt tokens excluded from policy loss | `test_loss_is_normalised_by_the_group_token_count_not_the_turn_count` + adapter's `test_tool_outputs_do_not_become_trainable_turns` |
 | Padding tokens excluded from policy loss | n/a — no padded batch path; covered by construction as noted above |
 | Frozen base weights unchanged | ⚠️ verified from the executed run's `trainable_parameter_count`, **not** covered by a CI test — needs a GPU |

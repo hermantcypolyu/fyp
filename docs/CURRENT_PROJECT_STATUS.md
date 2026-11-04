@@ -535,13 +535,16 @@ episode.
 > Verdict: **15 of 20 §4.2 items verified, 1 satisfied by construction, 2 absent
 > (reference-policy KL and everything that depends on it), 2 not applicable.**
 > The code is a one-step, clipped, group-relative policy-gradient update with LoRA —
-> *GRPO-style*, not full GRPO.
+> *GRPO-style*, not full GRPO. Of the extracted math, only `group_advantages` is shared
+> code the GPU script actually calls; `policy_ratio`, `clipped_surrogate` and `policy_loss`
+> are torch-free **scalar reference implementations** covered by CPU unit tests, and those
+> tests do not establish numerical equivalence with the vectorised torch path.
 
 **4.1 Locate the training files**
 
 - [X] Rollout adapter — `training/rollout_adapter.py` (12 tests)
-- [X] Reward-to-advantage code — `training/grpo_math.py::group_advantages`
-- [X] Policy loss — `training/grpo_math.py::policy_loss`, mirrored in the torch loop
+- [X] Reward-to-advantage code — `training/grpo_math.py::group_advantages` (shared; called by the script)
+- [X] Policy loss — `training/grpo_math.py::policy_loss` as a **scalar reference**; the executed loss is torch code in `scripts/run_optimizer_smoke.py`
 - [X] Optimizer step — `scripts/run_optimizer_smoke.py:477`
 - [X] Checkpoint save/reload — `scripts/run_optimizer_smoke.py:492`
 - [X] LoRA config — `scripts/run_optimizer_smoke.py:301` and `configs/training/*.yaml`
@@ -551,20 +554,28 @@ episode.
 
 - [X] Multiple rollouts per task — `load_samples` enforces one `task_id`; run used 8
 - [X] Independent reward per rollout — `_require_reward` rejects non-finite
-- [X] Group mean computed — reproduced the recorded `-0.125` exactly
-- [X] Group-relative advantage computed — `(r - mean) / (std + eps)`, bit-identical
-- [X] Zero-variance groups handled — `DegenerateGroupError`, never a silent zero
+- [X] Group mean computed — reproduced the recorded `-0.125` to within `1e-12`
+- [X] Group-relative advantage computed — `(r - mean) / (std + eps)`, matching to `1e-12`
+- [X] Zero-variance groups handled — `DegenerateGroupError`, never a silent zero. Current
+  behaviour is **fail fast**: `compute_advantages` re-raises as `RuntimeError` and the
+  single-group smoke run stops. It does **not** skip the group and continue, and records no
+  skipped-group status. Skip-and-continue is future work for a multi-group trainer.
 - [X] Generated-token log probabilities obtained
 - [X] Prompt tokens masked — logits sliced from `prompt_length - 1`
 - [X] Padding tokens masked — **by construction**: turns are scored unpadded, one
   sequence each; no batched path exists to pad
 - [X] Old-policy probability (or reference) available — `generation_log_probs`
-- [X] Policy probability ratio computed — `policy_ratio`
-- [X] Clipped policy objective present — one-sided `min(r*A, clip(r)*A)`, as PPO specifies
-- [ ] **Reference-policy KL regularisation present — ABSENT.** No reference model is
-  loaded; `grep -n "kl\|ref_model"` over the script returns nothing. Deferred because a
-  frozen 1.5B copy does not fit: the run already peaked at 19.9-22.9 GB of 24 GB.
-  `test_there_is_no_kl_term_to_test` pins the absence so this cannot be ticked silently.
+- [X] Policy probability ratio computed — torch `exp(clamp(current - old, -20, 20))`; scalar reference `policy_ratio`
+- [X] Clipped policy objective present — torch `min(r*A, clamp(r, 1±e)*A)`; scalar reference
+  `clipped_surrogate`, one-sided as PPO specifies
+- [ ] **Reference-policy KL regularisation present — ABSENT.** The GRPO objective proposed
+  for this project includes reference-policy KL regularisation. The current controlled smoke
+  implementation omits the reference model and KL term, so it does not yet match the
+  proposed full training objective. No reference model is loaded; `grep -n "kl\|ref_model"`
+  over the script returns nothing. The historical 24 GB A5000 budget (run peaked at
+  19.9-22.9 GB) is why it was deferred; the current box has an RTX A6000 with ~48 GB, so a
+  reference policy is future design work, not an impossibility.
+  `test_scalar_reference_loss_has_no_kl_term` guards the scalar reference module only.
 - [ ] **KL direction correct — not applicable**, since no KL term exists.
 - [X] Loss applied only to generated tokens
 - [X] Backward produces finite gradients — recorded norm 0.307842467
@@ -580,7 +591,9 @@ episode.
 **4.3 Fixed naming**
 
 - [X] "GRPO with LoRA" only if the full GRPO objective is verified — it is **not**
-  verified (no KL), so this name must not be used
+  verified (no KL), so this name must not be used. KL absence is one reason among several:
+  it is also a single controlled step, task coverage is limited, there is no multi-step run,
+  no completed before-and-after evaluation, and no demonstrated coding-performance gain.
 - [X] Otherwise "Controlled GRPO-style LoRA update" — this is the name in use in
   `README.md`, `docs/PHASE_F4_CONTROLLED_UPDATE.md`, `docs/PHASE_F3_OPTIMIZER_SMOKE.md`,
   `docs/TRAINING_READINESS.md` and `PROGRESS.md`. No rename was needed.
@@ -604,7 +617,8 @@ episode.
   `test_clipping_does_not_apply_to_the_disadvantageous_direction`,
   `test_inside_the_trust_region_the_objective_is_not_clipped`
 - [ ] **Rising KL is reflected in the loss — cannot be tested; no KL term exists.**
-  `test_there_is_no_kl_term_to_test` pins the gap with `inspect.signature`.
+  `test_scalar_reference_loss_has_no_kl_term` is a structural guard on the scalar reference
+  module only; repository-wide absence rests on source inspection, not on that test.
 - [X] Prompt tokens excluded from policy loss — `test_loss_is_normalised_by_the_group_token_count_not_the_turn_count`
 - [ ] **Padding tokens excluded from policy loss — not applicable.** Each turn is scored as
   one unpadded sequence of `len(prompt) + len(generation)`; there is no batched path.
@@ -620,8 +634,9 @@ episode.
 
 **Anchor test.** `test_reproduces_the_recorded_smoke_run_exactly` replays the rewards from
 an executed RTX A6000 run and asserts the mean, standard deviation and both advantage values
-to the last decimal. That is the evidence that extracting the math into `training/grpo_math.py`
-did not change it.
+to within `1e-12` relative and absolute. That is the evidence that extracting the math into
+`training/grpo_math.py` left its results numerically unchanged — equivalence, not binary
+identity.
 
 ---
 

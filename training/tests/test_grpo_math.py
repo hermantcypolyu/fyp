@@ -40,18 +40,22 @@ RECORDED_ADVANTAGE_NEGATIVE = -2.6457433110887805
 
 
 def test_reproduces_the_recorded_smoke_run_exactly():
-    """The extracted math must be the math that actually executed.
+    """The extracted math must agree with the recorded run to numerical precision.
 
-    Every literal here was read out of a metrics file produced by
+    Every expected value here was read out of a metrics file produced by
     `scripts/run_optimizer_smoke.py` on real hardware, not computed by this test
-    from the implementation. If the refactor changed a single bit, this fails.
+    from the implementation. The assertion is one of numerical equivalence, not
+    binary identity: floating-point arithmetic does not guarantee bit-for-bit
+    agreement across platforms, builds or vectorisation widths, so the
+    tolerances are tight (`rel=1e-12, abs=1e-12`) rather than exact.
     """
     advantages, mean, std = group_advantages(RECORDED_REWARDS)
+    tolerance = {"rel": 1e-12, "abs": 1e-12}
 
-    assert mean == RECORDED_MEAN
-    assert std == RECORDED_STD
-    assert advantages[0] == RECORDED_ADVANTAGE_POSITIVE
-    assert advantages[4] == RECORDED_ADVANTAGE_NEGATIVE
+    assert mean == pytest.approx(RECORDED_MEAN, **tolerance)
+    assert std == pytest.approx(RECORDED_STD, **tolerance)
+    assert advantages[0] == pytest.approx(RECORDED_ADVANTAGE_POSITIVE, **tolerance)
+    assert advantages[4] == pytest.approx(RECORDED_ADVANTAGE_NEGATIVE, **tolerance)
 
 
 # --- 4.4 Equal rewards -> advantage near zero (actually: rejected) -----------------------
@@ -70,7 +74,13 @@ def test_equal_rewards_are_rejected_rather_than_scored_as_zero_advantage():
         group_advantages([-1.0] * 8)
 
 
-def test_a_group_smaller_than_two_cannot_have_a_mean():
+def test_a_single_member_group_cannot_provide_relative_advantage():
+    """One member can have a mean; it cannot have a group-relative comparison.
+
+    A single-member group trivially has a mean equal to its only reward, but the
+    advantage would be `0/0`: there is no second member to compare against and
+    no non-zero population variance to divide by.
+    """
     with pytest.raises(DegenerateGroupError, match="at least two"):
         group_advantages([0.5])
 
@@ -174,13 +184,18 @@ def test_clip_epsilon_must_be_non_negative():
 # --- 4.4 KL is absent, and the loss must not pretend otherwise ---------------------------
 
 
-def test_there_is_no_kl_term_to_test():
-    """Component 4.4 asks that "rising KL is reflected in the loss". It cannot be.
+def test_scalar_reference_loss_has_no_kl_term():
+    """Structural guard on the scalar reference module only.
 
-    `scripts/run_optimizer_smoke.py` loads no reference model and computes no KL
-    divergence, and `policy_loss` takes no KL input. This test pins that absence
-    so the checklist item cannot be quietly ticked later: if a `kl` parameter is
-    added, this test fails and whoever added it is prompted to add the real test.
+    This asserts that `policy_loss` in `training.grpo_math` exposes no KL input
+    and that the module defines no scalar KL helper. It is **not** a
+    repository-wide proof that no KL implementation exists: the GPU path in
+    `scripts/run_optimizer_smoke.py` is out of this test's scope entirely, and
+    only source inspection can establish repository-wide absence.
+
+    The audit finding that the controlled smoke run omits the reference model
+    and KL term is documented in `docs/PHASE4_GRPO_AUDIT.md` and rests on
+    reading the source, not on this test.
     """
     import inspect
 
