@@ -31,7 +31,7 @@ Verified by a real command, with output stored under `results/` or reproduced by
 - **Five-task SWE-Gym Lite baseline pilot** — external sanity check only; **not** a training
   dataset and **not** evidence of improvement.
 
-Measured facts at the last full verification: **303 unit tests passed, 0 skipped**, **36/36** tasks
+Measured facts at the last full verification: **583 unit tests passed, 0 skipped**, **36/36** tasks
 solvable by gold and failable without it, held-out seal `318fedc8868b` intact, and
 `make check` (seal, validate, verify-gold, test, lint) exiting **0** with 0 ruff findings.
 
@@ -45,7 +45,11 @@ solvable by gold and failable without it, held-out seal `318fedc8868b` intact, a
   full GRPO objective or only a group-relative reward-weighted update.
 - **Phase 7 preparation** — preparing a small, controlled 1.5B GRPO + LoRA run after the reward
   and GRPO checks are complete.
-- **1.5B before-and-after evaluation** — protocol fixed, baseline rollouts not yet collected.
+- **1.5B before-and-after evaluation** — protocol fixed and the bring-up batch
+  `phase6_baseline_1p5b` (48 rows) was **collected and diagnosed**, but the batch is
+  `baseline_valid: false`: it is diagnostic evidence only, is unsuitable as GRPO training
+  input (zero within-task reward variance), and the before/after comparison remains
+  unevidenced. Valid baseline evaluation is pending recollection after Phase 6B.
 
 ---
 
@@ -82,8 +86,11 @@ Every experiment must answer this question directly. If an experiment does not, 
 | **3B**   | Main final experiment                                      | gated on 1.5B success                           |
 | 7B             | Optional extension, **not** a graduation requirement | existing runs are external baseline pilots only |
 
-Hardware: the A5000 (24 GB) / A6000 class GPU is the plan of record. **A100 is not required at
-this stage.**
+Hardware: the plan of record is **RTX A6000 (~48 GB)**, which is what the execution host
+actually has (2 cards, one used). This was written as "A5000 (24 GB) / A6000 class" while the
+target was still a projection; `nvidia-smi` and the completed F4 run both say A6000. The
+conservative settings sized for 24 GB are retained deliberately — see
+`docs/PHASE5_FIXED_PROTOCOL.md` §2.7. **A100 is not required at this stage.**
 
 The report must explain why 1.5B precedes 3B: the reward and training loop must be validated
 cheaply before compute is spent on a larger model.
@@ -642,6 +649,14 @@ identity.
 
 ### Phase 5 — Fixed experiment protocol
 
+
+
+**Status: protocol and manifest infrastructure implemented; rollout-only pilot configuration is pending task selection; formal NeMo RL training remains blocked by required-field and runtime parser validation.**
+
+Phase 5 did not launch a model, collect rollouts or update model parameters.
+
+The current Polyverse host exposes two NVIDIA RTX A6000 GPUs, but Phase 5 only defined and tested the protocol, manifest lifecycle and resource-control rules.
+
 **Status: 5.1 and 5.2 complete and test-enforced; 5.3 written but never exercised.**
 The protocol is `configs/training/protocol_1p5b.yaml` (hashed into every manifest), the
 manifest tool is `scripts/run_manifest.py`, and the machine rules are
@@ -673,13 +688,21 @@ asserted present by `analysis/tests/test_protocol_parity.py::test_protocol_decla
 - [X] Rollouts per task — `rollouts.rollouts_per_task: 4`
 - [X] Temperature — `sampling.temperature: 1.0`, asserted equal to the baseline
   (`test_sampling_temperature_is_identical_in_both_arms`)
-- [ ] **Top-p** — `sampling.top_p: null`. The baseline sets `1.0`; neither trainer config sets
-  it. Copying `1.0` would assert the trainer defaults to it, which is not the same as being
-  configured to it. A sampler difference between arms is the confound this file exists to
-  prevent, so it stays visible. **Must be set in both arms before the baseline.**
+- [X] Top-p — `sampling.top_p: 1.0`, RESOLVED 2026-11-04 as a *choice* rather than a
+  discovery: `1.0` disables nucleus truncation, so temperature is the only thing shaping the
+  sampler and a truncated nucleus cannot masquerade as an RL effect. Configured in both arms
+  (`configs/eval/baseline.yaml` `sampling.top_p` and
+  `configs/training/grpo_nemo_rl_a5000.yaml` `policy.generation.top_p`) and pinned by
+  `test_sampling_top_p_is_identical_in_both_arms` and
+  `test_top_p_is_actually_set_rather_than_inherited`.
 - [X] Max turns — `episode.max_turns: from_task_yaml`
 - [X] Max tool calls — `episode.max_tool_calls: from_task_yaml`
-- [X] Max sequence length — `model.max_seq_length: 8192`, asserted equal to the baseline
+- [X] Max sequence length — `model.max_seq_length: 8192`, asserted equal to the baseline.
+  The NeMo RL mapping is RESOLVED 2026-11-04 against the pinned source: a total prompt +
+  completion budget is `policy.max_total_sequence_length`, so the trainer sets it to `8192`,
+  and the engine ceiling `policy.generation.vllm_cfg.max_model_len` is also `8192` so the
+  engine can hold a full trajectory. `policy.generation.max_new_tokens` is a *completion-only*
+  cap and is deliberately unset: this protocol defines no completion budget.
 - [X] Gradient clipping — `training.max_grad_norm: 1.0`
 - [ ] **KL coefficient** — `grpo.kl_coefficient: null`. `0.0` would claim a KL term exists and
   is switched off; `docs/PHASE4_GRPO_AUDIT.md` found no reference policy, so no term exists.
@@ -702,8 +725,7 @@ checkpoint, GPU, seed, result folder. Implemented in `scripts/run_manifest.py`; 
 mapping is asserted by
 `analysis/tests/test_run_manifest.py::test_manifest_has_every_field_phase_5_2_requires`.
 
-- [X] A manifest is generated per run — `uv run python scripts/run_manifest.py --arm <a>
-  --run-id <id> -o <dir>`; written *before* the run, since it records identity, not outcome
+- [X] A manifest is generated per run — `uv run python scripts/run_manifest.py --arm <a> --run-id <id> -o <dir>`; written *before* the run, since it records identity, not outcome
 - [X] Config hash recorded — `arm_config.sha256` and `protocol.file.sha256`
   (`test_config_hashes_change_when_the_config_changes`)
 - [X] Checkpoint hash recorded — `checkpoints.input` / `.output`, each `{spec, local, sha256}`
@@ -753,44 +775,169 @@ fact.
 
 ### Phase 6 — 1.5B baseline evaluation
 
-**6.1 Fix the baseline**
+> **Status: 6.1 baseline configuration complete; 6.2 collector execution completed but the
+> batch failed acceptance; 6.3 diagnostic analysis completed, while valid baseline evaluation
+> remains pending recollection.**
+>
+> Run `phase6_baseline_1p5b` (2026-11-06) persisted 48 rows across 6 training tasks, 8
+> rollouts per task. The collection and analysis **machinery** executed end to end and is
+> proven. The **product** of that machinery — the batch — failed baseline acceptance:
+> 40 rows are reward-eligible, 8 are infrastructure-invalid context overflows, 0 rollouts
+> solved the task, 0 rollouts earned a positive reward, and every reward-eligible task group
+> has reward standard deviation `0.0`. `Decision: C`, `baseline_valid: false`
+> (`results/raw/phase6_baseline_1p5b/RUN_STATUS.json`).
+>
+> **The 48-row bring-up batch is retained as diagnostic evidence only. It must not be used as
+> the accepted baseline, as GRPO training input, or as evidence of model performance.**
 
-- [ ] Original 1.5B base model
-- [ ] No LoRA checkpoint loaded
-- [ ] Prompt fixed
-- [ ] Harness fixed
-- [ ] Tool descriptions fixed
-- [ ] Sampling settings fixed
-- [ ] Turn / tool budget fixed
-- [ ] Verifier fixed
-- [ ] `reward_v2` fixed
-- [ ] Evaluation task list fixed
+Checkbox legend: `[X]` implemented, collected or objectively observed · `[ ]` acceptance
+criterion not achieved · `[N/A]` not applicable · `[P]` planned or pending execution.
 
-**6.2 Collect enough rollouts**
+**6.1 Fix the baseline** — all ten pins are in `configs/eval/baseline_phase6.yaml`, which fails
+closed on any missing key rather than defaulting. *Configuration pins: 10/10 present.*
 
-- [ ] Multiple rollouts on each training task
-- [ ] More than one task
-- [ ] Avoid identical rewards across all rollouts
-- [ ] Successful trajectories saved
-- [ ] Failed trajectories saved
-- [ ] Gated trajectories saved
-- [ ] Tool errors saved
-- [ ] Tokens and runtime recorded
+- [X] Original 1.5B base model — `Qwen/Qwen2.5-Coder-1.5B-Instruct` @ `2e1fd397ee46`
+- [X] No LoRA checkpoint loaded — `checkpoint_id: null`
+- [X] Prompt fixed — `prompt.version: baseline_phase6_v1`
+- [X] Harness fixed — `envs/coding_env`, transport `direct`
+- [X] Tool descriptions fixed — `coding_env_tools_v3`, 7 names
+- [X] Sampling settings fixed — temperature 1.0, top_p 1.0, seed 42
+- [X] Turn / tool budget fixed — `max_turns` 30, `max_tool_calls` 60
+- [X] Verifier fixed — entrypoint, runner, reward_range, constants, floor_tests
+- [X] `reward_v2` fixed — v1 live, v2 analysed (`v2_version: 2`)
+- [X] Evaluation task list fixed — 6 of 26 train tasks in `run.task_subset`
 
-**6.3 Baseline analysis**
+**6.2 Collect enough rollouts** — 48 rows in `results/raw/phase6_baseline_1p5b/rollouts.jsonl`.
+*Collection machinery: executed. Baseline acceptance: failed.*
 
-- [ ] Mean reward
-- [ ] Reward standard deviation
-- [ ] Pass@1
-- [ ] Hidden-test success rate
-- [ ] Valid-submission rate
-- [ ] Syntax-failure rate
-- [ ] Safety-gate rate
-- [ ] Mean turns
-- [ ] Mean tool calls
-- [ ] Mean token usage
-- [ ] Mean runtime
-- [ ] Failure categories
+- [X] Multiple rollouts collected — 8 per task, 48 total
+- [X] More than one training task represented — 6 tasks
+- [X] Submitted trajectories saved — 8 reward-eligible rows submitted a candidate patch
+- [X] Failed model-behaviour trajectories saved — 32 `max_turns` rows, reward −1.0
+- [X] Infrastructure-invalid attempts preserved — 8 rows, `termination_reason: error`
+- [X] Tool errors saved — 656 failed steps across 32 rows
+- [X] Token and runtime fields recorded — `token_usage` and `duration_s` on 48/48 rows
+- [ ] **Non-zero within-task reward variation** — every reward-eligible task group has
+      `reward_stdev = 0.0`. The pooled cross-task values of −1.0 and 0.0 do **not** provide
+      the within-group variation GRPO requires: they separate tasks from each other, not
+      rollouts of the same task from each other.
+- [ ] **Successful trajectories saved** — 0 solved rollouts, 0 positive-reward rollouts. A
+      submitted or attempted trajectory is not a successful one; all 8 submissions scored 0.0.
+- [ ] **Baseline acceptance achieved** — see the acceptance result below.
+
+Separating execution from behaviour:
+
+| Item | Evidence |
+|---|---|
+| Submitted trajectories | 8 rows (`feature_interval_merge`), all reward 0.0 |
+| Solved rollouts | 0 |
+| Positive-reward rollouts | 0 |
+| Failed model-behaviour trajectories | 32 (`max_turns`, reward −1.0) |
+| Infrastructure-invalid attempts | 8 context overflows |
+| Tasks with zero reward-eligible rollouts | 1 (`testupdate_money_api_v2`) |
+
+The 8 context-overflow rows are **infrastructure-invalid**: they are excluded from reward and
+task-success metrics, they are **not** reward −1.0 model failures, and
+`testupdate_money_api_v2` is therefore an *unmeasured* task, not a poorly performing one.
+
+> **Acceptance result: failed.** The batch is diagnostic evidence only and must not be used as
+> the accepted baseline or as GRPO training input.
+
+**6.3 Diagnostic analysis of the rejected bring-up batch** — artefact
+`results/analysis/phase6_baseline_1p5b.json`. These are diagnostics of a rejected batch, **not**
+an accepted baseline result. Every figure below states its population and denominator.
+
+| Metric | Value | Population / denominator |
+|---|---|---|
+| Mean reward | −0.80 | 40 reward-eligible rows |
+| Pooled population stdev | 0.40 | 40 reward-eligible rows (`pstdev`) |
+| Reward range | min −1.0, max 0.0 | 40 reward-eligible rows |
+| Within-task stdev | 0.0 | each of 5 reward-eligible task groups |
+| Pass@1 | 0.0 | task-level: 0 solved / 40 eligible |
+| Aggregate hidden-test pass fraction | 112/496 = 0.2258 | test-level diagnostic, 40 eligible rows |
+| Candidate-submission rate | 8/40 = 0.20 | submitted among reward-eligible rows |
+| Solved-submission rate | 0/40 = 0.00 | solved among reward-eligible rows |
+| Syntax-failure rate | 8/40 = 0.20 | syntax failures among reward-eligible rows |
+| Security-gate rate | 0.0 | `sandbox_escape` and `tests_modified` only, among 40 eligible |
+| Mean turns | 17.6 | 40 reward-eligible rows |
+| Mean tool calls | 17.4 | 40 reward-eligible rows |
+| Mean cumulative token usage | 57,529 | per rollout, summed over all requests in the episode |
+| Mean recorded rollout duration | 18.83 s | 40 reward-eligible rows only |
+| Batch wall-clock duration | 1,168.4 s | all 48 rows, whole run |
+
+- [X] Mean reward, pooled stdev and range
+- [X] Pass@1 and solved / positive-reward counts
+- [X] Aggregate hidden-test pass fraction
+- [X] Candidate-submission and solved-submission rates
+- [X] Syntax-failure and security-gate rates
+- [X] Mean turns, tool calls, token usage and rollout duration
+- [X] Failure categories
+
+**Metric caveats that must travel with those numbers:**
+
+- *The pooled standard deviation reflects differences across tasks. It does not provide the
+  within-task variation required by group-relative optimisation.* Every eligible task group is
+  internally uniform (`reward_stdev = 0.0`), so this batch is **not suitable as GRPO training
+  input**.
+- *Pass@1 is a task-level success metric.* Do not infer task success from the pooled
+  hidden-test fraction.
+- *112/496 is a test-level diagnostic among reward-eligible rows.* It may include tests that
+  already passed in the untouched repository. It is not a task-level success rate and must not
+  be interpreted as Pass@1.
+- "Valid submission" is **not** used, because it would conflate at least six distinct states
+  (submit action occurred, patch existed, patch applied, syntax valid, verifier completed, task
+  solved). The separate **candidate-submission rate** and **solved-submission rate** above name
+  exactly one condition each.
+- *The security-gate rate covers `sandbox_escape` and `tests_modified` only.* This excludes
+  submission, syntax and infrastructure failures, which are reported separately.
+- *Token usage is cumulative across all requests in an episode and is not the context length of
+  a single request.* Verified against row `bugfix_offbyone_pagination__r00`: 20 turns,
+  `prompt 61,838 + completion 2,496 = total 64,334`, where the largest single step is 206.
+- *18.83 s is the mean recorded rollout duration over the 40 reward-eligible rows.* It is **not**
+  the batch duration; the whole 48-row run took 1,168.4 s wall-clock.
+
+**Failure categories** — `failure_category()` assigns **one label per rollout by first matching
+rule**, so the four categories partition the 48 rows exactly (their counts sum to 48). Each
+rollout contributes to exactly one primary failure category; additional secondary symptoms may
+exist.
+
+| Category | Count | Rule |
+|---|---|---|
+| `infrastructure_failure` | 8 | unchanged reproduction detected first, before any policy label |
+| `no_submission_turns_exhausted` | 24 | did not submit, terminated at `max_turns`, and was not already classified by a higher-priority rule |
+| `partial_tests_passed` | 8 | submitted, some but not all hidden tests passed, reward 0.0 |
+| `syntax_failure` | 8 | patch failed to apply or parse, checked before the submission branch |
+
+- `no_submission_turns_exhausted` is assigned when the rollout did not submit, terminated at
+  `max_turns`, and was not already classified by a higher-priority rule such as
+  `syntax_failure`. This primary category contains **24 rows**. A total of **32 rows** share
+  the broader secondary symptom of reaching `max_turns` without submitting; **8 of those** are
+  assigned to the `syntax_failure` primary category.
+- Secondary symptoms may overlap primary categories: the 32 `max_turns`-without-submission
+  rows are one such symptom spread across two mutually exclusive primary categories, 24 and 8.
+- `partial_tests_passed` does **not** mean positive progress and does **not** mean solved: all 8
+  scored reward 0.0 at 6/14 tests with a floor of 6.
+- Context-overflow rows are **unmeasured infrastructure outcomes**, not model failures.
+- `testupdate_money_api_v2` must not appear as a poor-performing measured task; it has **zero
+  valid rollouts**.
+
+**Preserved overflow explanation:** the overflow occurred on **turn 13**, with **zero tool
+calls**, **7,291 completion tokens of prose**, **7,990 message tokens** and **1,024 reserved
+completion tokens**, a total request of **9,014 tokens** against a **8,192** limit. The initial
+prompt is only ~700 tokens. *Shrinking the initial prompt would not have fixed the observed
+overflow. The growth came from accumulated assistant prose that was retained across turns.*
+
+**Phase 6 decision**
+
+- Decision: **C**
+- `baseline_valid`: **false**
+- Collection machinery: **proven**
+- Analysis machinery: **proven**
+- Accepted baseline: **not available**
+- GRPO training suitability: **failed** (all valid task groups have zero reward variance)
+- Recollection after Phase 6B: **required**
+- Model parameter update: **not performed**
+- `reward_v2` live integration: **not approved**
 
 ---
 
@@ -1007,7 +1154,8 @@ harness-specific behaviour; 7B not formally trained; limited statistical power.
 6. Add unit tests and leakage tests for `reward_v2`.
 7. Audit the training code to classify it as full GRPO or GRPO-style.
 8. Fix the 1.5B baseline and experiment configuration.
-9. Collect baseline rollouts, then execute the Phase 7 small 1.5B GRPO + LoRA run.
+9. Re-collect baseline rollouts under the Phase 6B context fix, then execute the Phase 7 small
+   1.5B GRPO + LoRA run.
 10. Reload the updated checkpoint and complete the fair baseline vs updated 1.5B comparison in Phase 8.
 
 ---
