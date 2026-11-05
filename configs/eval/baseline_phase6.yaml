@@ -1,0 +1,327 @@
+# Phase 6.1 — the frozen baseline. The pre-RL control arm, pinned field by field.
+#
+# ############################################################################
+# ##  STATUS: FROZEN. Everything the baseline needs is decided.             ##
+# ############################################################################
+#
+# `configs/eval/baseline.yaml` says what the control arm *is*. This file says what
+# the Phase 6 *run* used, and it is the file the analysis reads. The difference
+# matters: baseline.yaml carries `status: NEVER_EXECUTED` and several `undecided`
+# gaps because it was written before anything ran. Phase 6 must not inherit an
+# "undecided" into a run that produces numbers, so every item of the Phase 6.1
+# checklist is resolved here and each one cites where its value comes from.
+#
+# Provenance vocabulary (same as docs/PHASE5_FIXED_PROTOCOL.md):
+#   GROUNDED   - copied from a config or file that already exists in this repo.
+#   CHOSEN     - a decision made here, with a stated reason.
+#   ASSUMPTION - accepted as true without hardware verification.
+#   null       - genuinely undecided; reported as a gap, never filled with a guess.
+#
+# AGENT_BUILD_SPEC §5.6: the evaluation reward and the RL reward come from ONE
+# verifier. Nothing here re-implements scoring.
+
+meta:
+  name: baseline_phase6
+  phase: "6.1"
+  status: FROZEN
+  role: control arm (pre-RL), the reference the Phase 7 checkpoint is compared against
+  written: 2026-11-04
+  supersedes_gaps_in: configs/eval/baseline.yaml
+  # This file is frozen: changing a value here invalidates the Phase 6 numbers and
+  # requires a re-run. Tests assert the frozen values; see
+  # analysis/tests/test_baseline_phase6.py.
+
+# ------------------------------------------------------------------ 6.1 checklist
+# The ten items of the Phase 6.1 checklist, each mapped to the section that fixes it
+# and to the key a test reads. The point of this block is that "fixed" is checkable:
+# an item is fixed only if its pointer resolves and its value is bound.
+checklist:
+  "Original 1.5B base model": {section: model, key: model.name, bound: true}
+  "No LoRA checkpoint loaded": {section: model, key: model.adapter, bound: true, expected_null: true}
+  "Prompt fixed": {section: prompt, key: prompt.version, bound: true}
+  # The harness has no version string of its own; what makes it "fixed" is that the
+  # transport and the per-rollout timeout are pinned here rather than chosen per run.
+  "Harness fixed": {section: episode, key: episode.transport, bound: true}
+  "Tool descriptions fixed": {section: tools, key: tools.version, bound: true}
+  "Sampling settings fixed": {section: sampling, key: sampling.temperature, bound: true}
+  "Turn / tool budget fixed": {section: episode, key: episode.max_turns, bound: true}
+  "Verifier fixed": {section: verifier, key: verifier.entrypoint, bound: true}
+  "reward_v2 fixed": {section: reward, key: reward.analysed, bound: true}
+  "Evaluation task list fixed": {section: tasks, key: tasks.list, bound: true}
+
+# ---------------------------------------------------------------- 6.1 model (1/2)
+model:
+  name: Qwen/Qwen2.5-Coder-1.5B-Instruct     # GROUNDED: configs/training/protocol_1p5b.yaml
+                                             # `model.name`; the same base the RL arm starts from
+  revision: 2e1fd397ee46e1388853d2af2c993145b0f1098a  # GROUNDED: protocol_1p5b.yaml
+                                             # `model.revision`; the cached snapshot's commit sha.
+                                             # A repo name alone resolves to whatever is current,
+                                             # which is invisible irreproducibility.
+  adapter: null                              # GROUNDED, and the point of the arm: no LoRA means
+                                             # `checkpoint_id: null` on every trace row, so a
+                                             # post-RL delta cannot be confused with a base read.
+  load_in_4bit: false                        # CHOSEN: the *serving* arm differs from the training
+                                             # arm here on purpose. 4-bit quantisation changes the
+                                             # weights, so a 4-bit control against a 16-bit policy
+                                             # measures quantisation, not RL. The 1.5B BF16 model is
+                                             # ~3.1 GB and fits GPU 0 with room to spare.
+                                             # (protocol_1p5b.yaml carries `load_in_4bit: true` for
+                                             # the *trainer*, where VRAM is the binding constraint.)
+  dtype: bfloat16                            # GROUNDED: the cached model.safetensors is BF16
+                                             # (3087467144 bytes, 338 tensors)
+  max_seq_length: 8192                       # GROUNDED: protocol_1p5b.yaml `model.max_seq_length`;
+                                             # the two arms must see the same context window
+
+# ------------------------------------------------------- 6.1 harness / prompt (2/3)
+# The prompt and harness are pinned by CONTENT HASH, not by a version string, because
+# a version string is a promise while a hash is evidence. `scripts/collect_baseline_
+# rollouts.py` recomputes both and refuses to start if they no longer match, so a
+# rollout batch cannot silently describe a prompt that has since been edited.
+prompt:
+  version: baseline_phase6_v1
+  # The user turn is the task's own `instruction:` field, verbatim and unmodified.
+  # ASSUMPTION: no task instruction is rewritten, summarised, or reordered by the
+  # harness - a rewritten instruction is a different prompt with the same hash label.
+  user_message: task_yaml_instruction
+  system_message: |
+    You are a software engineer fixing a bug in a code repository.
+
+    You have tools available. Use them to inspect the repository, understand the
+    problem, and make the smallest correct change. Use `list_files` and `read_file`
+    to explore; use `edit_file`, `replace_lines` or `write_file` to change files;
+    use `run_tests` to check your work. When you are finished, call `submit`.
+
+    Rules:
+    - Do not modify existing test files. Doing so is detected and scored as a
+      failure.
+    - Do not add your own tests in place of fixing the bug.
+    - Make the smallest change that fixes the problem.
+
+# ----------------------------------------------------------------------- 6.1 tools
+tools:
+  version: coding_env_tools_v3          # the v3 trace schema's tool set
+  source: envs/coding_env/tools.py::TOOL_DEFINITIONS   # GROUNDED: the single definition the
+                                        # RL arm also uses, so both arms see identical
+                                        # descriptions. Re-implementing them here would be
+                                        # the quietest possible way to diverge.
+  names:                                # the seven dispatchable tools, in the order they are
+                                        # offered to the model; asserted against TOOL_DEFINITIONS
+    - list_files
+    - read_file
+    - write_file
+    - edit_file
+    - replace_lines
+    - run_tests
+    - submit
+  # GROUNDED: gates from envs/coding_env/tools.py. A baseline that scores well by
+  # hacking is not a baseline, so gate rates are reported beside the reward always.
+  gates:
+    tests_modified: GATE_TESTS_MODIFIED
+    sandbox_escape: GATE_SANDBOX_ESCAPE
+
+# --------------------------------------------------------------------- 6.1 sampling
+sampling:
+  temperature: 1.0        # GROUNDED: baseline.yaml + protocol_1p5b.yaml, asserted identical
+                          # across arms by analysis/tests/test_protocol_parity.py
+  top_p: 1.0              # GROUNDED: same; resolved 2026-11-04 in both arms
+  seed: 42                # GROUNDED: both arms
+  max_tokens_per_turn: 1024  # CHOSEN: a 1.5B repair turn is a tool call plus a short
+                          # rationale; 1024 keeps a runaway generation from eating a turn
+                          # budget. Truncation at this cap is recorded, not hidden.
+  # k rollouts per task. pass@1 is the headline; k>1 gives pass@k and a variance
+  # estimate, which is what 6.2's "avoid identical rewards across all rollouts" needs.
+  #
+  # CHOSEN 4, GROUNDED floor: the protocol's group_size is 4 and baseline.yaml's
+  # n_samples_per_task is 4. Kept at 4 for arm parity. Phase 6 requires *statistics*,
+  # so the run config (below) raises it to 8 for the baseline read; that deviation is
+  # a rollout-budget decision, and it is recorded here rather than left implicit.
+  rollouts_per_task: 4
+
+# --------------------------------------------------------- 6.1 episode budget (4/5)
+episode:
+  # GROUNDED: both come from each task.yaml (`constraints.max_turns` /
+  # `constraints.max_tool_calls`), so a task's own budget is authoritative and the two
+  # arms cannot diverge. `envs/coding_env/session.py::EpisodeSession.open` reads max_turns;
+  # `Toolbox` enforces max_tool_calls server-side.
+  max_turns: from_task_yaml
+  max_tool_calls: from_task_yaml
+  # CHOSEN: a per-rollout wall-clock cap. Without it one hung task holds the batch.
+  timeout_s_per_rollout: 900
+  # CHOSEN: per tool call. run_tests shells out to pytest, so it needs the longest.
+  timeout_s_per_tool_call: 120
+  transport: direct       # CHOSEN: `direct` drives EpisodeSession with no HTTP hop, so a
+                          # Phase 6 rollout doesn't depend on the gym stack being importable.
+                          # docs/decisions/0002-nemo-gym-is-an-optional-extra.md. §5.6
+                          # requires both transports to produce the same reward; the trace
+                          # records which was used, so a mixed batch is visible.
+  # GROUNDED: caps applied to the graded pytest subprocess (envs/coding_env/limits.py).
+  limits:
+    wall_clock_s: 60
+    cpu_s: 60
+    memory_mb: 2048
+    max_file_mb: 64
+    max_processes: 64
+
+# ----------------------------------------------------------------- 6.1 verifier (6)
+verifier:
+  # GROUNDED: AGENT_BUILD_SPEC §5.6 — one verifier for evaluation and for RL reward.
+  entrypoint: envs.coding_env.verifier.verify_sandbox
+  runner: pytest
+  # The reward is normalised (ADR 0006): 0.0 = achieved nothing, 1.0 = solved,
+  # negative = broke tests that passed when the episode started.
+  reward_range: [-1.0, 1.0]
+  # GROUNDED: rewards/compose.py constants, recorded so the analysis does not hardcode them
+  constants:
+    solved: 1.0
+    did_nothing: 0.0
+    minimum: -1.0
+    gate: -1.0
+  # GROUNDED: the floor is the task's own `verification.floor_tests`; a regression below
+  # it is what the negative range exists for.
+  floor_tests: from_task_yaml
+
+# ------------------------------------------------------------------- 6.1 reward (7)
+reward:
+  live: reward_v1         # GROUNDED: the only reward any live path imports
+  analysed: reward_v2     # GROUNDED: computed offline, never on the rollout path
+  reward_v2_computed_inline: false   # GROUNDED: reward_v2 reads the finished trace, so it
+                                     # cannot influence the trajectory it scores
+  # The whole point of freezing reward_v2: the same trace must produce the same v2 number
+  # in Phase 6 and in Phase 8, or the before/after comparison is measuring the metric.
+  v2_version: "2"
+
+# ------------------------------------------------------------------ 6.1 task list (8)
+tasks:
+  split: train            # GROUNDED: training data may be run freely
+  # GROUNDED + SEALED: docs/heldout_seal.md. The held-out split is run EXACTLY ONCE, at the
+  # end of the project, after the final checkpoint is chosen using train only. Phase 6 is
+  # not that run. `scripts/check_heldout_seal.py` fails the build if this flips.
+  heldout_enabled: false
+  # The evaluation list is the 26 train tasks, enumerated explicitly rather than by
+  # globbing the directory. A glob would silently include a task added later, changing
+  # the denominator of every mean and making two "baseline" numbers incomparable.
+  # Verified against `benchmark/tasks/train/` on 2026-11-04; a test asserts set equality
+  # and that every id resolves via find_task(..., split="train").
+  list:
+    # --- bug_fix (10) ---
+    - bugfix_dotenv_bom_prefix
+    - bugfix_filesize_unit_rollover
+    - bugfix_intcomma_zero_ndigits
+    - bugfix_intword_power_rollover
+    - bugfix_metric_zero_domain_error
+    - bugfix_naturalsize_float_bytes
+    - bugfix_offbyone_pagination
+    - bugfix_ordinal_suffix_teens
+    - bugfix_throttle_timedelta
+    - bugfix_where_missing_keys
+    # --- config_fix (4) ---
+    - configfix_console_entrypoints
+    - configfix_optional_dependency_markers
+    - configfix_src_layout_migration
+    - configfix_textkit_packaging
+    # --- docs_improve (3) ---
+    - docs_readme_and_exports_textindex
+    - docs_signature_drift_httpclient
+    - docs_stale_doctests_dateparse
+    # --- small_feature (6) ---
+    - feature_csv_column_selection
+    - feature_interval_merge
+    - feature_lru_cache_eviction_stats
+    - feature_pathspec_negation
+    - feature_ratelimit_token_bucket
+    - feature_retry_backoff_jitter
+    # --- test_update (3) ---
+    - testupdate_always_reversible_rename
+    - testupdate_funcy_omit_rename
+    - testupdate_money_api_v2
+  # n_tasks is derived, never typed twice: 26. A test asserts len(list) == 26 and that
+  # every entry resolves via find_task(..., split="train").
+  expected_n_tasks: 26
+
+# ----------------------------------------------------------------------- run budget
+# What the Phase 6.2 collection is actually asked to do. Separate from `sampling`
+# because `sampling.rollouts_per_task` is the arm-parity value while this is the
+# batch the baseline read needs.
+run:
+  # CHOSEN 8: 4 (the protocol's group size) is the arm-parity floor, but 6.2 asks for
+  # reward *variance*, and a 4-sample group is too small to distinguish "no variation"
+  # from "unlucky draw". 8 doubles the samples per task at ~2x wall clock.
+  rollouts_per_task: 8
+  # CHOSEN 6 of the 26: enough tasks that a per-task mean is not one task's opinion,
+  # few enough to finish. NOT random: a fixed, recorded subset, so the run is repeatable
+  # by name. One task per category, plus a second bug_fix (the largest category), so the
+  # read is not dominated by one category and can be compared to a later read.
+  task_subset:
+    - bugfix_offbyone_pagination          # bug_fix (smoke-verified upstream)
+    - bugfix_filesize_unit_rollover       # bug_fix
+    - configfix_textkit_packaging         # config_fix
+    - docs_stale_doctests_dateparse       # docs_improve
+    - feature_interval_merge              # small_feature
+    - testupdate_money_api_v2             # test_update
+  # CHOSEN: refuse a batch whose rollouts all scored the same. See 6.2 "avoid identical
+  # rewards across all rollouts" - a zero-variance batch is not a baseline, it is a
+  # harness bug wearing a baseline's clothes.
+  require_reward_variance: true
+  min_distinct_rewards: 2
+  # CHOSEN 1 per configured task (6 of 6 here = 6). Stricter than "n_rollouts > 0":
+  # a batch where one task contributed nothing has a silently different denominator,
+  # and a per-task mean over the survivors is not the mean the protocol describes.
+  min_valid_rollouts: 6
+
+# ---------------------------------------------------------------- context budgeting
+# Added in Phase 6B. Phase 6.2 lost 8 of 48 rollouts to HTTP 400 "maximum context
+# length" because nothing measured the prompt before sending it. The numbers are a
+# mixture of GROUNDED (the model's own window) and CHOSEN (the reserves).
+context:
+  max_model_len: 8192            # GROUNDED: model.max_seq_length above and the vLLM
+                                 # --max-model-len the server is started with. A prompt
+                                 # probe against a different window would be measuring
+                                 # the wrong model.
+  reserved_completion_tokens: 1024   # GROUNDED: model.max_tokens_per_turn. The probe must
+                                 # leave room for the completion the request will ask for,
+                                 # otherwise "the prompt fits" is only true of the prompt.
+  safety_margin_tokens: 64       # CHOSEN: template tokens (chat markers, generation
+                                 # prompt) that a bare message-token count does not see.
+                                 # Small on purpose - a large margin would silently clip
+                                 # usable context and quietly change the baseline.
+  # CHOSEN: the tokenizer must match the weights, so it is pinned by revision exactly
+  # as the model is. Read through `transformers`, which lives in the server venv, not
+  # in this project's venv.
+  tokenizer_path: ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-Coder-1.5B-Instruct/snapshots/2e1fd397ee46e1388853d2af2c993145b0f1098a
+  observation_char_cap: 2000     # CHOSEN: applied only during compaction, i.e. only to
+                                 # *older* observations. Recent tool output is passed
+                                 # through untouched, so the model still sees what it just
+                                 # asked for. 2000 chars is roughly 500 tokens.
+  keep_recent_tool_messages: 4   # CHOSEN: the last 4 tool results stay verbatim. Large
+                                 # enough to cover a failing test run plus a file read.
+
+# --------------------------------------------------------------------------- output
+output:
+  run_id: phase6_baseline_1p5b
+  rollouts: results/raw/phase6_baseline_1p5b/rollouts.jsonl        # analysis/trace_schema.json v3
+  failures: results/raw/phase6_baseline_1p5b/rollouts_failures.jsonl
+  private: results/raw/phase6_baseline_1p5b/rollouts_private.jsonl
+  analysis: results/analysis/phase6_baseline_1p5b.json
+
+# -------------------------------------------------------------------- model server
+# The endpoint the collector talks to. Served by vLLM from a separate environment
+# (/home/hermanyeung/venvs/qwen-server), not from this project's .venv, so the
+# project's dependency set is unchanged by Phase 6.
+server:
+  # CHOSEN 8010, not the 8000 in configs/model_server_local.yaml: on this host port 8000
+  # is already held by another user's uvicorn (root/icadmin). Binding there would either
+  # fail or, worse, silently talk to someone else's model. Check the port before serving.
+  base_url: http://127.0.0.1:8010/v1
+  api_key: dummy_key
+  served_model_name: Qwen/Qwen2.5-Coder-1.5B-Instruct
+  cuda_visible_devices: "0"     # GROUNDED: docs/PHASE5_GPU_RESOURCE_RULES.md rule 1 and 2.
+                                # GPU 1 belongs to another user and is never touched.
+  gpu_memory_utilization: 0.4   # GROUNDED: docs/PHASE5_GPU_RESOURCE_RULES.md
+
+# ------------------------------------------------------------------------ provenance
+# Non-claims, so that a reader does not mistake a frozen config for a validated one.
+not_established:
+  - "No Phase 6 run had completed when this file was written; values are frozen, not measured."
+  - "The prompt hash pins the text, not its quality: a frozen bad prompt is still bad."
+  - "`direct` transport is the only one exercised; `gym` parity for these tasks is unproven."
+  - "`max_tokens_per_turn` truncation may cost turns; it is recorded per row, not corrected for."

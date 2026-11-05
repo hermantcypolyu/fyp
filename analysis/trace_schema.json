@@ -28,6 +28,68 @@
     "versions"
   ],
   "properties": {
+    "infrastructure_failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional (Phase 6B). Present iff the rollout failed for a reason that is not the policy's fault. Before this existed, a context-window overflow and a model mistake produced the same shape of row, so the analysis could not tell a broken run from a bad one. Absent on every other row.",
+      "required": ["error_type", "stage", "model_executed", "reward_eligible", "message"],
+      "properties": {
+        "error_type": {
+          "type": "string",
+          "enum": ["context_budget_exceeded", "tokenizer_unavailable", "transport_error"],
+          "description": "context_budget_exceeded: the prompt plus the reserved completion would not fit the model window, so the request was never sent. tokenizer_unavailable: no exact token count was possible, so the run stopped rather than guess."
+        },
+        "stage": {
+          "type": "string",
+          "enum": ["preflight", "preflight_after_compaction", "server"],
+          "description": "Where it failed. 'preflight' = the first request of the rollout was over budget. 'preflight_after_compaction' = compaction ran and the prompt was still too large. 'server' = the request was sent and the server itself refused it, which means the local probe under-counted."
+        },
+        "model_executed": {
+          "type": "boolean",
+          "description": "False means no token was generated: the failure happened before the model was invoked. That is what separates an episode that never happened from one that scored badly."
+        },
+        "reward_eligible": {
+          "type": "boolean",
+          "const": false,
+          "description": "Always false. An infrastructure failure cannot carry a reward: scoring it would invent an episode the policy never played, and GRPO would then learn from it."
+        },
+        "message": { "type": "string" },
+        "context_budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_model_len", "capacity", "prompt_tokens", "status"],
+          "properties": {
+            "max_model_len": { "type": "integer", "minimum": 1 },
+            "capacity": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "max_model_len minus the reserved completion and the safety margin: the largest prompt that can be sent."
+            },
+            "prompt_tokens": { "type": "integer", "minimum": 0 },
+            "status": { "type": "string", "enum": ["ok", "context_budget_exceeded", "tokenizer_unavailable"] },
+            "detail": { "type": "string" }
+          }
+        }
+      }
+    },
+    "context_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional (Phase 6B) per-rollout context telemetry. Token COUNTS only - never prompt text, so a row stays safe to share. Written even on successful rollouts, because the interesting baseline number is how close the policy came to the wall, not just whether it hit it.",
+      "required": ["max_model_len", "reserved_completion_tokens", "safety_margin_tokens", "capacity"],
+      "properties": {
+        "max_model_len": { "type": "integer", "minimum": 1 },
+        "reserved_completion_tokens": { "type": "integer", "minimum": 0 },
+        "safety_margin_tokens": { "type": "integer", "minimum": 0 },
+        "capacity": { "type": "integer", "minimum": 0 },
+        "peak_prompt_tokens": { "type": "integer", "minimum": 0 },
+        "compaction_events": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many times old observations were elided to stay inside the window. A non-zero value is a measurement of prompt growth, not a defect."
+        }
+      }
+    },
     "schema_version": {
       "type": "string",
       "const": "3",
@@ -41,8 +103,8 @@
     },
     "termination_reason": {
       "type": "string",
-      "enum": ["submitted", "max_turns", "max_tool_calls", "timeout", "error"],
-      "description": "The cause, as distinct from result.gates which is the consequence. max_turns and max_tool_calls both fire the no_submit gate; only this field tells them apart. Every rollout ends for exactly one of these reasons, including rollouts that raised."
+      "enum": ["submitted", "max_turns", "max_tool_calls", "timeout", "error", "infrastructure_error"],
+      "description": "The cause, as distinct from result.gates which is the consequence. max_turns and max_tool_calls both fire the no_submit gate; only this field tells them apart. Every rollout ends for exactly one of these reasons, including rollouts that raised. 'infrastructure_error' (v3 additive, Phase 6B) is distinct from 'error': the harness or the transport failed before or between model calls, so the episode is not evidence about the policy. Those rows carry a null result.reward and are excluded from every aggregate."
     },
     "started_at": { "type": "string", "format": "date-time" },
     "finished_at": { "type": "string", "format": "date-time" },
