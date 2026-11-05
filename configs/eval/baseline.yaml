@@ -25,11 +25,24 @@ model:
   adapter: null                            # no LoRA — this is the untrained control
   load_in_4bit: true                       # match the training arm, so the comparison
                                            # is RL-vs-no-RL and not 4bit-vs-16bit
-  max_seq_length: 8192                     # must match configs/training/grpo_unsloth_a5000.yaml
+  max_seq_length: 8192                     # = configs/training/protocol_1p5b.yaml
+                                           # `model.max_seq_length`, the arm-independent
+                                           # budget. This arm does not use NeMo RL, so
+                                           # there is no `policy.max_total_sequence_length`
+                                           # to map to: `model.max_seq_length` IS the field
+                                           # this arm's model server reads, so the budget
+                                           # maps to itself here. No equivalent engine
+                                           # capacity key is exposed by this arm either;
+                                           # documented as absent rather than invented.
 
 sampling:
-  temperature: 1.0        # matches GRPOConfig.temperature in the training config, so the
-                          # control is sampled the way the policy is during rollouts
+  temperature: 1.0        # matches `policy.generation.vllm_cfg.temperature` in
+                          # configs/training/grpo_nemo_rl_a5000.yaml, so the control is
+                          # sampled the way the policy is during rollouts
+  # 1.0 disables nucleus truncation. Set explicitly in both arms as of 2026-11-04: the
+  # trained arm previously had no top_p at all and inherited a framework default, so
+  # "the arms sample the same way" was an assumption rather than a setting. Pinned by
+  # analysis/tests/test_protocol_parity.py.
   top_p: 1.0
   # k samples per task. pass@1 is the headline; k>1 gives pass@k and a variance estimate.
   #

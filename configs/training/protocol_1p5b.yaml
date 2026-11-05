@@ -49,13 +49,23 @@ model:
   # configs/training/grpo_nemo_rl_a5000.yaml `policy.model_name` already agree, and this
   # is the model the whole pipeline has been built and smoke-tested against.
   name: Qwen/Qwen2.5-Coder-1.5B-Instruct
-  # ASSUMPTION - NOT PINNED. A Hugging Face repo name resolves to whatever the current
-  # revision is; two runs a week apart can load different weights under the same string
-  # and no field in a trace would differ. Resolve a commit sha before the first real run:
-  #     hf api models/Qwen/Qwen2.5-Coder-1.5B-Instruct --expand sha
-  # and put it here. Until then every run manifest records `revision: null`, which is an
-  # honest "unpinned", not a claim that the weights are fixed.
-  revision: null
+  # GROUNDED 2026-11-04 from a local Hugging Face cache, not from an assumption.
+  #
+  # A repo name resolves to whatever the current revision is; two runs a week apart can
+  # load different weights under the same string with no field in a trace differing. This
+  # is now pinned to the immutable commit sha of the snapshot that is actually on disk:
+  #
+  #   evidence     ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-Coder-1.5B-Instruct
+  #   refs/main    2e1fd397ee46e1388853d2af2c993145b0f1098a   (the only snapshot present)
+  #   weights      model.safetensors, 3087467144 bytes, 338 tensors, BF16, single shard
+  #   completeness header data_offsets sum + header + 8 == file size exactly, so the
+  #                download is whole rather than a truncated prefix
+  #   cross-check  HfApi().model_info(...).sha == the same sha on 2026-11-04, so the
+  #                cached snapshot was also current main, not a stale local fork
+  #
+  # A pinned revision is safer than `main` even though the two currently agree: `main` is
+  # a moving target and the whole point of this field is that it does not move.
+  revision: 2e1fd397ee46e1388853d2af2c993145b0f1098a
   # GROUNDED: configs/eval/baseline.yaml matches this so the control arm is 4-bit too;
   # the comparison is then RL-vs-no-RL and not 4bit-vs-16bit.
   load_in_4bit: true
@@ -63,6 +73,22 @@ model:
   max_seq_length: 8192            # GROUNDED: both arm configs agree. ASSUMPTION as a
                                   # VRAM figure - the source value was measured on an
                                   # H100, and this is the first OOM lever.
+                                  #
+                                  # WHERE THIS NUMBER GOES. This file configures no
+                                  # trainer, so it names the budget without naming a
+                                  # trainer key. The formal trainer
+                                  # (configs/training/grpo_nemo_rl_a5000.yaml) maps it to
+                                  # `policy.max_total_sequence_length: 8192`, because that
+                                  # is the pinned NeMo RL field that bounds TOTAL tokens
+                                  # (prompt + completion) per trajectory - resolved
+                                  # 2026-11-04 against commit 55296257, read-only. The
+                                  # same config also sets
+                                  # `policy.generation.vllm_cfg.max_model_len: 8192`, the
+                                  # engine context ceiling, which must be >= this budget.
+                                  # `policy.generation.max_new_tokens` is a SEPARATE
+                                  # completion-only cap and is deliberately left unset:
+                                  # this protocol defines no completion budget, so setting
+                                  # one would be inventing a protocol value.
 
 # --------------------------------------------------------------------------- LoRA
 # GRPO/LoRA shape. source: configs/training/grpo_unsloth_a5000.yaml (upstream notebook [S3]).
@@ -108,6 +134,8 @@ training:
 rollouts:
   # GROUNDED: grpo_nemo_rl_a5000.yaml `num_generations_per_prompt`, already halved from 8
   # for a 24 GB card. This is the value the trainer config would actually use.
+  # NOT raised for the A6000 the code runs on: the halving is part of the settings every
+  # recorded run used, so changing it would break comparability for no measured gain.
   group_size: 4
   # CHOSEN - TASK COUNT. Phase 7 says "few training tasks". Four prompts per step x 4
   # rollouts = 16 episodes per step, which is the largest step we have any evidence the
@@ -121,10 +149,39 @@ rollouts:
 # --------------------------------------------------------------------------- sampling
 sampling:
   temperature: 1.0                # GROUNDED: both arm configs agree
-  # null - NOT DECIDED. Neither arm config sets top_p; the trainer's default would apply
-  # silently. Fix this before the baseline, because a sampler difference between the
-  # arms is exactly the confound this file exists to prevent.
-  top_p: null
+  # CHOSEN - RESOLVED 2026-11-04, and recorded as a choice rather than a discovery.
+  #
+  # This was `null` because the control arm set `top_p: 1.0` while the active trainer set
+  # nothing, so "both arms use 1.0" rested on a framework default nobody had verified -
+  # the thing AGENT_BUILD_SPEC §1.2 forbids treating as a configured value. The gap is now
+  # closed by *configuring* it in both arms rather than by *assuming* the default:
+  #   configs/eval/baseline.yaml               sampling.top_p: 1.0  (already set)
+  #   configs/training/grpo_nemo_rl_a5000.yaml policy.generation.top_p: 1.0 (added)
+  #
+  # KEY PATH RESOLVED 2026-11-04 against the pinned NeMo RL source (commit
+  # 55296257c96d49cd95c7d77613cb0f36bd4a4dc7, read-only at that SHA). `top_p` and
+  # `temperature` are TOP-LEVEL members of `policy.generation`, NOT members of
+  # `policy.generation.vllm_cfg`: `GenerationConfig` in
+  # nemo_rl/models/generation/interfaces.py declares them directly, `VllmSpecificArgs` in
+  # nemo_rl/models/generation/vllm/config.py does not declare them at all, and
+  # `_build_sampling_params` in nemo_rl/models/generation/vllm/vllm_worker.py reads
+  # `self.cfg["top_p"]` / `self.cfg["temperature"]` where `self.cfg` is the
+  # `policy.generation` mapping. The earlier third-party contradiction (NeMo Gym's aviary
+  # README vs multichallenge_nrl.yaml:30) is settled in favour of the latter: sampling is
+  # at `policy.generation`, and only engine options such as `gpu_memory_utilization` sit
+  # under `vllm_cfg`.
+  #
+  # STILL NOT RUNTIME-VERIFIED: NeMo RL requires Python >=3.13.13,<3.14 and is not installed
+  # here, so this file has not been loaded by the real parser. The path is source-grounded;
+  # runtime acceptance remains a blocking open item before any training run.
+  #
+  # The value: 1.0 disables nucleus truncation, so the full distribution is sampled and
+  # temperature is the only thing shaping the sampler. That is the conservative choice for
+  # this experiment - a truncated nucleus in one arm and not the other would be a sampler
+  # difference masquerading as an RL effect, which is precisely the confound this file
+  # exists to prevent. It is NOT a grounded upstream value: no config we have evidence for
+  # selected it, so the manifest records it as a choice.
+  top_p: 1.0
   # GROUNDED: configs/eval/baseline.yaml `sampling.seed`.
   seed: 42
 
@@ -145,12 +202,22 @@ grpo:
   # GROUNDED: upstream GRPOConfig `epsilon_high`. The trainer's lower clip is the
   # symmetric default of the same value.
   clip_epsilon: 0.28
-  # NOT APPLICABLE, and recorded anyway because Phase 5.1 asks for it. The controlled
-  # update has NO reference model and therefore no KL term (docs/PHASE4_GRPO_AUDIT.md
-  # 4.2). A null here means "absent", not "zero": writing 0.0 would claim a KL term
-  # exists and is switched off. If a reference policy is added later this becomes a
-  # number and the audit must be re-run.
+  # NOT APPLICABLE - NOT A GAP. Recorded anyway because Phase 5.1 asks for it.
+  #
+  # The controlled update has NO reference model and therefore no KL term
+  # (docs/PHASE4_GRPO_AUDIT.md 4.2). A null here means "absent", not "zero": writing 0.0
+  # would claim a KL term exists and is switched off, which is a different and stronger
+  # claim about the objective.
+  #
+  # `status` is what distinguishes this from the two gaps that ARE blockers. A null
+  # top_p or revision meant "nobody has decided yet, and a run would proceed on a
+  # default" - those had to be resolved before a pilot. This one means "the quantity does
+  # not exist in this implementation", so it can never be resolved by choosing a number
+  # and must never block a run. Kept as a null so the manifest still reports it; the
+  # status tells a reader whether the null is an open question or a closed one.
   kl_coefficient: null
+  kl_coefficient_status: NOT_APPLICABLE_CURRENT_IMPLEMENTATION
+  kl_coefficient_reason: no reference-policy KL term exists in the current controlled GRPO-style implementation
   # GROUNDED: grpo_nemo_rl_a5000.yaml truncation policy.
   #
   # Named `drop_` rather than the trainer's `mask_truncated_completions` on purpose. This
@@ -185,9 +252,27 @@ data:
 
 # --------------------------------------------------------------------------- hardware
 hardware:
-  # GROUNDED: docs/vram_notes.md, configs/training/grpo_nemo_rl_a5000.yaml. The device
-  # actually used is recorded per run by scripts/run_manifest.py from nvidia-smi; this
-  # is the target, and a mismatch is reported rather than assumed away.
-  target_gpu: "RTX A5000 (24 GB)" # the F4 run recorded an A6000; see docs/PHASE_F4_CONTROLLED_UPDATE.md
-  # Phase 5.3: the experiment uses one device, and every command names it explicitly.
+  # TWO FACTS, recorded separately because conflating them produced a false claim.
+  #
+  # `target_gpu` previously read "RTX A5000 (24 GB)", which was a design assumption carried
+  # over from the planning phase and never checked against a machine. The hardware the work
+  # actually executes on is an A6000 (~48 GB per card, two cards present), and the completed
+  # controlled run F4 recorded an A6000 as well - see docs/PHASE_F4_CONTROLLED_UPDATE.md.
+  #
+  # The conservative settings below were NOT loosened to match the larger card. They are kept
+  # for stability and comparability: every VRAM figure and every timing already in the record
+  # was produced under them, and a pilot that changed group size, sequence length or
+  # concurrency at the same time as everything else would confound itself. The settings are
+  # therefore a policy choice, not a statement that the current GPU has 24 GB.
+  #
+  # GROUNDED: nvidia-smi on the execution host (hostname POLYVERSE) on 2026-11-04 reported
+  # two "NVIDIA RTX A6000" devices at 49140 MiB each, driver 535.309.01.
+  target_gpu: "RTX A6000 (48 GB)"
+  # HISTORICAL DESIGN CONSTRAINT, retained deliberately. The A5000 was the sizing target the
+  # protocol was reasoned against: group size halved to 4, max_seq_length 8192 as the first
+  # OOM lever, gpu_memory_utilization 0.4. Those numbers stay as they are, so this line is
+  # what stops a later reader concluding they were chosen for an A6000.
+  historical_design_target_gpu: "RTX A5000 (24 GB)"
+  # Phase 5.3: the experiment uses one device, and every command names it explicitly. This is
+  # unchanged by the larger card: a second GPU existing is not a reason to use it mid-experiment.
   cuda_visible_devices: "0"

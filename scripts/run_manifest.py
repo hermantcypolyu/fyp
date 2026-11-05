@@ -48,16 +48,26 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-#: The two arms of the experiment. `baseline` is the untrained control; `training` is the
-#: arm that performs the update. Both read the same protocol file, which is what makes the
-#: comparison attributable: the arm is the only thing that differs.
+#: The arms of the experiment. `baseline` is the untrained control; `training` is the arm
+#: that performs the update; `pilot` is a rollout-only smoke run that updates nothing.
+#: All three read the same formal protocol file, which is what makes the comparison
+#: attributable: the arm is the only thing that differs. `pilot` additionally carries its
+#: own overlay, which is recorded and hashed separately from the formal protocol - a pilot
+#: whose overlay was not hashed could be edited between the pilot and the claim about it.
 ARM_CONFIGS: dict[str, str] = {
     "baseline": "configs/eval/baseline.yaml",
     "training": "configs/training/grpo_nemo_rl_a5000.yaml",
+    "pilot": "configs/training/pilot_rollouts_1p5b.yaml",
 }
+
+#: Runs that never perform a parameter update, whatever else they do.
+NON_UPDATING_ARMS: frozenset[str] = frozenset({"pilot"})
 
 #: Files whose content defines the experiment. Hashed on every run.
 PROTOCOL_CONFIG = "configs/training/protocol_1p5b.yaml"
+#: The rollout-only overlay. Hashed on every run so the pilot cannot be described by a file
+#: that has since changed.
+PILOT_CONFIG = "configs/training/pilot_rollouts_1p5b.yaml"
 REWARD_V1_SOURCE = "rewards/compose.py"
 REWARD_V2_SOURCE = "rewards/v2.py"
 TRACE_SCHEMA = "analysis/trace_schema.json"
@@ -157,6 +167,21 @@ def load_protocol() -> dict[str, Any]:
         return yaml.safe_load(handle) or {}
 
 
+def load_pilot() -> dict[str, Any]:
+    """The rollout-only overlay, or `{}` when it is absent.
+
+    Absent is not an error: only the `pilot` arm reads it, and a missing file then shows up
+    as a null hash in the manifest and as a gap in `unresolved` rather than a crash.
+    """
+    import yaml
+
+    path = REPO_ROOT / PILOT_CONFIG
+    if not path.is_file():
+        return {}
+    with path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle) or {}
+
+
 def dataset_version() -> dict[str, Any]:
     """Which task corpus the run drew from, as a hash over the task definition files.
 
@@ -181,28 +206,152 @@ def dataset_version() -> dict[str, Any]:
     return {"present": True, "splits": per_split, "sha256": digest.hexdigest()}
 
 
+def _scan_tree(root: Path) -> tuple[str | None, int, int] | None:
+    """Walk `root` once and return `(tree_sha256, file_count, total_bytes)`.
+
+    Returns `None` when the tree holds no files. See `sha256_of_tree` for the hashing
+    contract; this helper exists so the digest, the file count and the byte total all come
+    from the *same* walk rather than three separate traversals that could disagree.
+    """
+    files = sorted(p for p in root.rglob("*") if p.is_file())
+    if not files:
+        return None
+    digest = hashlib.sha256()
+    total_bytes = 0
+    for path in files:
+        relative = path.relative_to(root).as_posix()
+        contents = path.read_bytes()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(contents)
+        digest.update(b"\0")
+        total_bytes += len(contents)
+    return digest.hexdigest(), len(files), total_bytes
+
+
+def sha256_of_tree(root: Path) -> str | None:
+    """Hash a directory of checkpoint files deterministically, or `None` if it holds none.
+
+    A checkpoint is usually a directory (`model.safetensors`, `config.json`, adapter
+    weights), and hashing only single files meant a completed run's weights went
+    unrecorded. This walks the tree and hashes it the way `dataset_version` hashes the task
+    corpus: relative paths sorted, each path and its bytes fed in, nothing else.
+
+    Deliberately excluded, because none of them describe the weights and including them
+    would make two identical checkpoints hash differently:
+
+      * mtimes, atimes and ctime - a copy is byte-identical but has a new mtime;
+      * permissions and ownership - a `chmod` is not a change to the model;
+      * directory entries themselves - only the relative path *text* is hashed, so an empty
+        subdirectory leaves no trace and `a/b.bin` hashes the same wherever `root` is;
+      * filesystem iteration order - `sorted` supplies the order, so the same content
+        written in any order gives the same digest.
+
+    The empty directory is the one case that needs a stated answer. A directory containing
+    no files returns `None`, not the hash of nothing, because an empty checkpoint directory
+    means the run produced no weights and that must be visible rather than recorded as a
+    successful hash of emptiness.
+
+    This is the digest-only view of `_scan_tree`; callers that also want the file count and
+    byte total should use that helper so both numbers come from one walk.
+    """
+    scanned = _scan_tree(root)
+    return None if scanned is None else scanned[0]
+
+
+def _describe_checkpoint(spec: str | None) -> dict[str, Any] | None:
+    """Describe one checkpoint path: absence, a single file, or a whole directory.
+
+    A directory record carries, in one traversal:
+      * `kind: "directory"` - distinguishes weights-on-disk from a single file;
+      * `sha256` / `tree_sha256` - the deterministic tree digest from `_scan_tree`;
+      * `file_count`, `total_bytes` - the shape of the checkpoint, so a truncated or
+        partially-written save is visible without re-hashing;
+      * `reason: "empty_directory"` - set only when the directory holds no files, in which
+        case the digest fields are absent rather than `null`-hashed.
+    """
+    if spec is None:
+        return None
+    path = Path(spec)
+    absolute = path if path.is_absolute() else REPO_ROOT / path
+    if not absolute.exists():
+        return {"spec": spec, "local": False, "kind": "absent", "sha256": None}
+    if absolute.is_file():
+        return {"spec": spec, "local": True, "kind": "file", "sha256": sha256_of(absolute)}
+    scanned = _scan_tree(absolute)
+    if scanned is None:
+        return {
+            "spec": spec,
+            "local": True,
+            "kind": "directory",
+            "sha256": None,
+            "reason": "empty_directory",
+        }
+    tree_hash, file_count, total_bytes = scanned
+    # `sha256` and `tree_sha256` are the same digest under two names: `sha256` keeps every
+    # record (file, directory, dataset) readable at one key, `tree_sha256` names what it is.
+    return {
+        "spec": spec,
+        "local": True,
+        "kind": "directory",
+        "sha256": tree_hash,
+        "tree_sha256": tree_hash,
+        "file_count": file_count,
+        "total_bytes": total_bytes,
+    }
+
+
 def checkpoint_info(input_checkpoint: str | None, output_checkpoint: str | None) -> dict[str, Any]:
     """Hash the input checkpoint (if it is a local path); name the output without hashing it.
 
     The output checkpoint does not exist when the manifest is written, so it is recorded
     as a declared path. Hashing it here would either fail or - worse - succeed against a
-    stale file from a previous run. `scripts/run_manifest.py --checkpoint-hash` fills it
-    in afterwards.
+    stale file from a previous run. `resolve_output_checkpoint` fills it in at `--finish`,
+    which is the first moment the file can legitimately exist.
+
+    An input *may* be hashed eagerly, and a directory input is hashed as a tree, because an
+    input that already exists is unambiguously the thing the run will read.
     """
+    return {
+        "input": _describe_checkpoint(input_checkpoint),
+        "output": _describe_checkpoint(output_checkpoint),
+    }
 
-    def describe(spec: str | None) -> dict[str, Any] | None:
-        if spec is None:
-            return None
-        path = Path(spec)
-        absolute = path if path.is_absolute() else REPO_ROOT / path
-        exists = absolute.exists()
-        return {
-            "spec": spec,
-            "local": exists,
-            "sha256": sha256_of(absolute) if absolute.is_file() else None,
-        }
 
-    return {"input": describe(input_checkpoint), "output": describe(output_checkpoint)}
+def resolve_output_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Re-inspect a declared output checkpoint, at close-out, against the filesystem.
+
+    Before a run the output is a promise: `local: false`, `sha256: null`. After a run it
+    is either a fact or a failure, and the difference matters:
+
+      * a directory of weights -> `local: true`, `kind: directory`, and its tree hash;
+      * a single weight file   -> `local: true`, `kind: file`, and its file hash;
+      * it does not exist      -> `local: false`, `sha256: null`, and
+        `reason: missing_at_close`, so a successful run that produced no weights is
+        visible rather than implied by an optimistic `local: true`.
+
+    What this must never do is invent a hash. A directory that exists but holds no file
+    (an empty checkpoint dir, or a partially written one) reports `local: true` with a
+    null hash and `reason: empty_directory`, because "the path exists" and "there are
+    weights there" are different claims and only the second one makes a result
+    reproducible.
+    """
+    output = (manifest.get("checkpoints") or {}).get("output")
+    if output is None:
+        return manifest
+    spec = output.get("spec")
+    if spec is None:
+        return manifest
+
+    resolved = _describe_checkpoint(spec)
+    if resolved is None:
+        return manifest
+    resolved.pop("spec", None)
+    output.update(resolved)
+    if not resolved["local"]:
+        output["reason"] = "missing_at_close"
+    return manifest
+    return manifest
 
 
 def unresolved_fields(manifest: dict[str, Any]) -> list[str]:
@@ -225,6 +374,13 @@ def unresolved_fields(manifest: dict[str, Any]) -> list[str]:
 
     for key in ("model", "lora", "training", "rollouts", "sampling", "grpo", "data", "hardware"):
         walk(manifest.get("protocol", {}).get(key), f"protocol.{key}")
+    # A pilot run whose overlay was edited away, or whose tasks list is still unset, is a
+    # gap worth naming rather than a detail hidden inside the hashed file.
+    if manifest.get("pilot", {}).get("applies"):
+        if manifest["pilot"].get("file", {}).get("sha256") is None:
+            gaps.append("pilot.file (overlay missing)")
+        if manifest["pilot"].get("tasks") is None:
+            gaps.append("pilot.tasks (not yet selected)")
     if not manifest.get("gpu", {}).get("present"):
         gaps.append("gpu (no GPU detected)")
     if manifest.get("git", {}).get("dirty"):
@@ -249,6 +405,7 @@ def build_manifest(
         raise ValueError(f"unknown arm {arm!r}; expected one of {sorted(ARM_CONFIGS)}")
 
     protocol = load_protocol()
+    pilot = load_pilot()
     now = datetime.now(UTC).isoformat()
 
     arm_config = ARM_CONFIGS[arm]
@@ -278,6 +435,43 @@ def build_manifest(
         },
         # -- per-arm override, hashed ------------------------------------------------
         "arm_config": config_hash(arm_config),
+        # -- the rollout-only overlay, recorded so a pilot run names the file that
+        #    defined it rather than only the formal protocol it did not execute.
+        #    The file hash is unconditional: it answers "did the overlay exist and has
+        #    anyone edited it", which is true whether or not this arm used it. The run's
+        #    settings are null on other arms, because a baseline manifest asserting
+        #    `training_iterations: 0` from a file it never read would be a false claim
+        #    dressed up as completeness. -----------------------------------------------
+        "pilot": {
+            "applies": arm in NON_UPDATING_ARMS,
+            "file": config_hash(PILOT_CONFIG),
+            "name": pilot.get("meta", {}).get("name") if arm in NON_UPDATING_ARMS else None,
+            "formal_protocol": (pilot.get("meta", {}).get("formal_protocol") if arm in NON_UPDATING_ARMS else None),
+            "performs_parameter_update": (
+                (pilot.get("purpose") or {}).get("performs_parameter_update") if arm in NON_UPDATING_ARMS else None
+            ),
+            "training_iterations": (
+                (pilot.get("training") or {}).get("training_iterations") if arm in NON_UPDATING_ARMS else None
+            ),
+            "optimizer_enabled": (
+                (pilot.get("training") or {}).get("optimizer_enabled") if arm in NON_UPDATING_ARMS else None
+            ),
+            "expect_output_checkpoint": (
+                (pilot.get("training") or {}).get("expect_output_checkpoint") if arm in NON_UPDATING_ARMS else None
+            ),
+            "rollouts_per_task": (
+                (pilot.get("rollouts") or {}).get("rollouts_per_task") if arm in NON_UPDATING_ARMS else None
+            ),
+            "tasks": (pilot.get("rollouts") or {}).get("tasks") if arm in NON_UPDATING_ARMS else None,
+            "concurrency": (pilot.get("hardware") or {}).get("concurrency") if arm in NON_UPDATING_ARMS else None,
+            "heldout_enabled": (pilot.get("data") or {}).get("heldout_enabled") if arm in NON_UPDATING_ARMS else None,
+            "reward_offline_only": (
+                (pilot.get("reward") or {}).get("offline_only") if arm in NON_UPDATING_ARMS else None
+            ),
+            "reward_v2_computed_inline": (
+                (pilot.get("reward") or {}).get("reward_v2_computed_inline") if arm in NON_UPDATING_ARMS else None
+            ),
+        },
         # -- what the numbers mean ---------------------------------------------------
         "reward": {
             "live": protocol.get("reward", {}).get("live"),
@@ -353,8 +547,13 @@ def finish_manifest(path: Path, status: str, failure_reason: str | None) -> dict
     """Close out a manifest: record the end time, duration and how the run ended.
 
     Editing a manifest after the fact is normally the thing this script prevents. This is
-    the one sanctioned edit, it is restricted to the `timing` and `outcome` blocks, and it
-    preserves everything that identifies the run.
+    the one sanctioned edit, it is restricted to the `timing`, `outcome` and
+    `checkpoints.output` blocks, and it preserves everything that identifies the run.
+
+    The output checkpoint is re-inspected here because this is the first moment it can
+    legitimately exist. Before close-out it is a declared path with `sha256: null`; after,
+    it either has a real hash or an explicit reason why it has none. It stays part of
+    `_identity`-preserving state: only `local`, `sha256` and `reason` move.
     """
     manifest = json.loads(path.read_text(encoding="utf-8"))
     now = datetime.now(UTC)
@@ -366,6 +565,7 @@ def finish_manifest(path: Path, status: str, failure_reason: str | None) -> dict
         except ValueError:
             manifest["timing"]["duration_s"] = None
     manifest["outcome"] = {"status": status, "failure_reason": failure_reason}
+    resolve_output_checkpoint(manifest)
     path.write_text(json.dumps(manifest, indent=2, sort_keys=False) + "\n", encoding="utf-8")
     return manifest
 
@@ -394,10 +594,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if args.split == "heldout" and args.arm == "training":
+    if args.split == "heldout" and args.arm in NON_UPDATING_ARMS | {"training"}:
         print(
             "refusing: the held-out split is sealed for training (docs/heldout_seal.md).\n"
-            "It is evaluated exactly once, at the end of the project, against a frozen checkpoint.",
+            "It is evaluated exactly once, at the end of the project, against a frozen checkpoint.\n"
+            "A rollout-only pilot does not create that checkpoint, so it still cannot open the seal.",
             file=sys.stderr,
         )
         return 2

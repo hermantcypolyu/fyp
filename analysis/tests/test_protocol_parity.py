@@ -75,6 +75,21 @@ def training() -> dict[str, Any]:
     return _load(TRAINING_PATH)
 
 
+@pytest.fixture(scope="module")
+def repo_root() -> Path:
+    return REPO_ROOT
+
+
+@pytest.fixture(scope="module")
+def proto_text() -> str:
+    return PROTOCOL_PATH.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def trainer_text() -> str:
+    return TRAINING_PATH.read_text(encoding="utf-8")
+
+
 def _get(doc: dict[str, Any], dotted: str) -> Any:
     node: Any = doc
     for part in dotted.split("."):
@@ -115,15 +130,88 @@ def test_sampling_temperature_is_identical_in_both_arms(
     """The control must be sampled the way the policy is sampled during rollouts.
 
     If these diverge, a difference between the arms is partly a sampler difference, and the
-    experiment can no longer answer the research question. Only the baseline is asserted:
-    `grpo_nemo_rl_a5000.yaml` does not restate a temperature, so the protocol file is the
-    trained arm's only record of it - which is precisely why it is written there.
+    experiment can no longer answer the research question.
+
+    The trained arm's value is now read from its own config rather than assumed absent. It
+    used to be asserted that the trainer set no temperature at all, which meant the trained
+    arm's sampling was whatever the framework chose - the exact thing Phase 5.4 set out to
+    stop relying on. Both arms now name it.
+
+    The path is `policy.generation.temperature`, not `policy.generation.vllm_cfg.temperature`:
+    `GenerationConfig` declares it at the top level of the generation mapping and
+    `_build_sampling_params` reads it as `self.cfg["temperature"]` (NeMo RL 55296257).
     """
+    trainer_temperature = training["policy"]["generation"]["temperature"]
     assert protocol["sampling"]["temperature"] == baseline["sampling"]["temperature"]
-    assert "temperature" not in training.get("grpo", {}), (
-        "the active trainer config now sets its own temperature; assert it equals the "
-        "protocol rather than leaving two sources of truth"
+    assert protocol["sampling"]["temperature"] == trainer_temperature
+
+
+def test_sampling_top_p_is_identical_in_both_arms(
+    protocol: dict[str, Any], baseline: dict[str, Any], training: dict[str, Any]
+) -> None:
+    """Nucleus truncation must be the same in the control and the trained arm.
+
+    The protocol recorded `top_p: null` until Phase 5.4 because the baseline set `1.0` while
+    the trainer set nothing at all, so "both arms sample identically" rested on an unverified
+    framework default. It is now configured in both arms. A drift here reintroduces exactly
+    the confound the protocol exists to prevent, so it is asserted directly.
+
+    The path is `policy.generation.top_p`, not `policy.generation.vllm_cfg.top_p`:
+    `_build_sampling_params` reads `self.cfg["top_p"]` and `VllmSpecificArgs` does not
+    declare `top_p` at all (NeMo RL 55296257).
+    """
+    trainer_top_p = training["policy"]["generation"]["top_p"]
+    assert protocol["sampling"]["top_p"] == baseline["sampling"]["top_p"]
+    assert protocol["sampling"]["top_p"] == trainer_top_p
+    assert 0.0 < protocol["sampling"]["top_p"] <= 1.0, "top_p outside (0, 1] is not a probability mass"
+
+
+def test_the_trainer_places_sampling_directly_under_generation(training: dict[str, Any]) -> None:
+    """Sampling keys belong on `policy.generation`, not inside `policy.generation.vllm_cfg`.
+
+    This is the structural half of the schema question, grounded in NeMo RL at commit
+    55296257c96d49cd95c7d77613cb0f36bd4a4dc7:
+
+      * `GenerationConfig` (nemo_rl/models/generation/interfaces.py) declares
+        `temperature: float` and `top_p: float` as top-level members.
+      * `VllmConfig(GenerationConfig)` (nemo_rl/models/generation/vllm/config.py) adds
+        `vllm_cfg: VllmSpecificArgs`, and `VllmSpecificArgs` declares neither key.
+      * `_build_sampling_params` (nemo_rl/models/generation/vllm/vllm_worker.py) reads
+        `self.cfg["temperature"]` and `self.cfg["top_p"]`, where `self.cfg` is the
+        generation mapping itself - a direct subscript, so a nested key would KeyError
+        at the first sampling call rather than be silently ignored.
+
+    This asserts file structure only. It does NOT exercise the NeMo RL parser: that needs
+    Python >=3.13.13,<3.14 and an installed NeMo RL, neither of which exists here. Runtime
+    acceptance of this config remains unproven and is recorded as such in the trainer file.
+    """
+    generation = training["policy"]["generation"]
+    assert generation["temperature"] == 1.0
+    assert generation["top_p"] == 1.0
+    assert "temperature" not in generation["vllm_cfg"], (
+        "temperature nested under vllm_cfg is not a member of VllmSpecificArgs; it moves up"
     )
+    assert "top_p" not in generation["vllm_cfg"], (
+        "top_p nested under vllm_cfg is not a member of VllmSpecificArgs; it moves up"
+    )
+
+
+def test_protocol_and_trainer_agree_on_the_documented_sampling_path(proto_text: str, trainer_text: str) -> None:
+    """Both files must name the same key path, and the stale nested path must be gone.
+
+    After Phase 5.4 the protocol cited `policy.generation.vllm_cfg.top_p`, which the pinned
+    upstream source shows is the wrong container. A document that still points at a path
+    the trainer no longer uses is worse than one that says nothing, so the citation is
+    asserted to match the resolved path.
+    """
+    assert "policy.generation.top_p" in proto_text or "policy.generation`" in proto_text, (
+        "the protocol must cite the resolved sampling path"
+    )
+    assert "policy.generation.vllm_cfg.top_p" not in proto_text, "the protocol still cites the superseded nested path"
+    assert "grounded" in trainer_text.lower() or "GROUNDED" in trainer_text, (
+        "the trainer must cite its grounding source for the sampling keys"
+    )
+    assert "55296257" in trainer_text, "the trainer must name the pinned commit it was checked against"
 
 
 def test_max_seq_length_is_identical_in_both_arms(protocol: dict[str, Any], baseline: dict[str, Any]) -> None:
@@ -210,18 +298,58 @@ def test_only_one_gpu_device_is_ever_named(protocol: dict[str, Any]) -> None:
 @pytest.mark.parametrize(
     ("dotted", "reason"),
     [
-        ("model.revision", "weights are not pinned to a commit"),
-        ("sampling.top_p", "no arm config selects one"),
         ("grpo.kl_coefficient", "there is no reference policy, so no KL term"),
     ],
 )
 def test_known_undecided_values_stay_explicitly_null(protocol: dict[str, Any], dotted: str, reason: str) -> None:
     """A null is an honest gap; a plausible number would be a false claim.
 
-    Filling one of these is a deliberate act that must also update the manifest's
-    `unresolved` list, so this test failing is a prompt to do it properly.
+    Only `grpo.kl_coefficient` is still null after Phase 5.4. It is not *undecided* in the
+    sense of "someone must choose a number" - the quantity does not exist in the current
+    implementation - but it stays null rather than 0.0 so that the manifest keeps reporting
+    it and a reader must look at `kl_coefficient_status` to learn why.
+
+    `model.revision` and `sampling.top_p` were removed from this list because they are now
+    resolved; they are covered by the tests below instead.
     """
     assert _get(protocol, dotted) is None, f"{dotted} is undecided: {reason}"
+
+
+def test_model_revision_is_pinned_to_a_commit_not_a_branch(protocol: dict[str, Any]) -> None:
+    """A repo name resolves to whatever is current; a sha does not move.
+
+    Phase 5.4 pinned this to the revision of the snapshot verified against the local Hugging
+    Face cache (see the provenance comment in the protocol file). The shape is asserted
+    rather than the literal value: a full 40-hex sha, and specifically not `main`, because
+    `main` is the failure mode this field exists to prevent.
+    """
+    revision = protocol["model"]["revision"]
+    assert isinstance(revision, str) and revision
+    assert revision != "main"
+    assert len(revision) == 40, "a full commit sha, not an abbreviation that can collide"
+    int(revision, 16)  # raises if any character is not a hex digit
+
+
+def test_top_p_is_actually_set_rather_than_inherited(protocol: dict[str, Any]) -> None:
+    """The protocol must name a value; a null would mean a framework default decides.
+
+    This is the specific gap Phase 5.4 closed. It is deliberately separate from the
+    cross-arm parity test: parity can hold while both arms are wrong, but a non-null here
+    means somebody chose it and wrote down that they had.
+    """
+    assert protocol["sampling"]["top_p"] is not None
+
+
+def test_kl_null_is_declared_not_applicable_rather_than_simply_missing(protocol: dict[str, Any]) -> None:
+    """A null with no status is indistinguishable from an oversight.
+
+    The KL coefficient is the one remaining null. `status` is what separates "closed
+    question - this quantity does not exist" from the open gaps that had to be resolved
+    before a pilot could run, and it is what lets a reader tell that a run is not blocked.
+    """
+    assert protocol["grpo"]["kl_coefficient"] is None
+    assert protocol["grpo"]["kl_coefficient_status"] == "NOT_APPLICABLE_CURRENT_IMPLEMENTATION"
+    assert protocol["grpo"]["kl_coefficient_reason"]
 
 
 def test_kl_absence_is_consistent_with_the_phase_4_audit(protocol: dict[str, Any]) -> None:

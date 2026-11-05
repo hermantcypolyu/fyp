@@ -43,15 +43,17 @@ compared across both arms, which is what makes a parity test possible.
 
 ## 2. Phase 5.1 — the fixed settings
 
-All nineteen checklist items are present in `configs/training/protocol_1p5b.yaml` and asserted
-present by `analysis/tests/test_protocol_parity.py::test_protocol_declares_every_phase_5_1_setting`.
+All twenty checklist items are present in `configs/training/protocol_1p5b.yaml` and asserted
+present by `analysis/tests/test_protocol_parity.py::test_protocol_declares_every_phase_5_1_setting`
+(the list is `PHASE_5_1_FIELDS`, which is the authority — count it rather than trusting this
+sentence).
 
 ### 2.1 Model
 
 | Setting | Value | Provenance | Why this value |
 | --- | --- | --- | --- |
 | Base model | `Qwen/Qwen2.5-Coder-1.5B-Instruct` | GROUNDED | same string in both arms; asserted by `test_protocol_names_the_model_the_arms_actually_load` |
-| Revision | `null` | **undecided** | nothing pins the weights to a commit (§2.5) |
+| Revision | `2e1fd397ee46e1388853d2af2c993145b0f1098a` | GROUNDED | the cached snapshot's commit sha; resolved in Phase 5.4 (§2.5) |
 | Quantisation | `load_in_4bit: true` | GROUNDED | `baseline.yaml`; 4-bit vs 16-bit is a larger effect than RL |
 | Full finetuning | `false` | GROUNDED | 24 GB does not fit a full 1.5B update with a vLLM server resident |
 | Max sequence length | `8192` | GROUNDED | `baseline.yaml`; the two arms must see the same context window |
@@ -95,41 +97,32 @@ produces a reloadable checkpoint, and small enough that a mistaken launch costs 
 | `rollouts.n_tasks` | `4` | GROUNDED | `num_prompts_per_step: 4` |
 | `rollouts.rollouts_per_task` | `4` | GROUNDED | equals group size; asserted |
 | `sampling.temperature` | `1.0` | GROUNDED | `baseline.yaml`; asserted equal across arms |
-| `sampling.top_p` | `null` | **undecided** | §2.5 |
+| `sampling.top_p` | `1.0` | GROUNDED | both arms agree; resolved in Phase 5.4 (§2.5) |
 | `sampling.seed` | `42` | GROUNDED | both arms |
 | `episode.max_turns` | `from_task_yaml` | GROUNDED | the task's own budget is authoritative |
 | `episode.max_tool_calls` | `from_task_yaml` | GROUNDED | as above |
 
-### 2.5 The three undecided values, and why they are `null`
+### 2.5 The one remaining gap, and why it is `null`
 
-These are the values a protocol would be tempted to fill in to look complete. Each is recorded
-as a gap, appears in the manifest's `unresolved` list, and is pinned as a gap by
-`test_known_undecided_values_stay_explicitly_null`.
+Three values were originally recorded as gaps (`model.revision`, `sampling.top_p`,
+`grpo.kl_coefficient`). Two were resolved in Phase 5.4; one remains.
 
-**`model.revision: null`.** A Hugging Face repo name resolves to whatever is current. Two runs
-a week apart can load different weights while every field in the manifest is identical — the
-most expensive kind of irreproducibility, because it is invisible. Resolve it to a commit
-before the first real run:
+**`model.revision` — resolved** to `2e1fd397ee46e1388853d2af2c993145b0f1098a`, the commit sha of
+the cached snapshot. A Hugging Face repo name resolves to whatever is current, so two runs a
+week apart could load different weights while every manifest field stayed identical — the most
+expensive kind of irreproducibility, because it is invisible. The sha removes that.
 
-```bash
-uv run huggingface-cli scan-cache          # if already downloaded
-# or, to see the current main revision
-python -c "from huggingface_hub import HfApi; print(HfApi().model_info('Qwen/Qwen2.5-Coder-1.5B-Instruct').sha)"
-```
+**`sampling.top_p` — resolved** to `1.0` in **both** arms: `configs/eval/baseline.yaml`
+(`sampling.top_p: 1.0`) and `configs/training/grpo_nemo_rl_a5000.yaml`
+(`policy.generation.top_p: 1.0`). The trainer path is `policy.generation.top_p`, *not*
+`policy.generation.vllm_cfg.top_p`: at NeMo RL `55296257`,
+`VllmSpecificArgs` does not declare `top_p` at all. A sampler difference between the arms is
+precisely the confound this file exists to prevent, so
+`test_sampling_top_p_is_identical_in_both_arms` asserts all three agree.
 
-Then replace `null` with that sha. Until then the manifest says the weights are unidentified,
-which is true.
-
-**`sampling.top_p: null`.** The baseline sets `top_p: 1.0`; neither trainer config sets it. The
-honest options were to copy `1.0` (asserting the trainer defaults to it, which is not the same
-as the trainer being configured to it) or to record that nobody has decided. A sampler
-difference between the arms is precisely the confound this file exists to prevent, so it is
-left visible rather than papered over. Whoever sets it must set it in **both** arms and delete
-the corresponding manifest gap.
-
-**`grpo.kl_coefficient: null`.** `0.0` would be a different and stronger claim: that a KL term
-exists and is switched off. `docs/PHASE4_GRPO_AUDIT.md` found no reference policy in the
-extracted GRPO path, so there is no KL term at all. `null` means *absent*;
+**`grpo.kl_coefficient: null` — still a gap.** `0.0` would be a different and stronger claim:
+that a KL term exists and is switched off. `docs/PHASE4_GRPO_AUDIT.md` found no reference policy
+in the extracted GRPO path, so there is no KL term at all. `null` means *absent*;
 `test_kl_absence_is_consistent_with_the_phase_4_audit` states this explicitly.
 
 ### 2.6 Reward, GRPO and data
@@ -148,10 +141,27 @@ extracted GRPO path, so there is no KL term at all. `null` means *absent*;
 
 ### 2.7 Hardware
 
+Two distinct facts, recorded separately. Conflating them is what produced a wrong claim in an
+earlier revision of this table, which listed the A5000 as the target without noting that the
+machine in use had never been an A5000.
+
 | Setting | Value | Provenance |
 | --- | --- | --- |
-| `target_gpu` | `RTX A5000 (24 GB)` | PROJECTED |
+| `target_gpu` | `RTX A6000 (48 GB)` | GROUNDED — `nvidia-smi` on the execution host, 2026-11-04: two `NVIDIA RTX A6000` at 49140 MiB, driver 535.309.01 |
+| `historical_design_target_gpu` | `RTX A5000 (24 GB)` | HISTORICAL — the sizing target the protocol was reasoned against |
 | `cuda_visible_devices` | `"0"` | CHOSEN — see [PHASE5_GPU_RESOURCE_RULES.md](PHASE5_GPU_RESOURCE_RULES.md) §2 for why it is set rather than assumed |
+
+**The conservative settings were not loosened when the hardware was corrected.** Group size
+stays 4, `max_seq_length` stays 8192, `gpu_memory_utilization` stays 0.4, and concurrency stays
+1. The reason is stability and comparability rather than a belief that the card has 24 GB: every
+VRAM figure and timing already in this project's record was produced under those settings, and a
+run that raised them at the same time as everything else would confound its own result. The
+24 GB column elsewhere in this document is therefore best read as "what was sized against",
+not "what is installed".
+
+The completed controlled run F4 also recorded an A6000
+([PHASE_F4_CONTROLLED_UPDATE.md](PHASE_F4_CONTROLLED_UPDATE.md)), so this is a correction of a
+documentation error rather than a change of hardware.
 
 ---
 
@@ -209,11 +219,17 @@ Makefile target can call the script every time. `outcome` and `timing` are exclu
 comparison, so finishing a manifest does not make it look like a different run.
 
 **Gaps are listed, not hidden.** `unresolved` collects every null, missing file, and dirty
-tree. On this machine it is non-empty and says so:
+tree. On this machine it is non-empty and says so. For the pilot arm, verified 2026-11-04:
 
 ```
-unresolved (3): protocol.model.revision, protocol.sampling.top_p, protocol.grpo.kl_coefficient
+unresolved (3): protocol.grpo.kl_coefficient,
+                pilot.tasks (not yet selected),
+                git.dirty (tree had uncommitted changes)
 ```
+
+`protocol.model.revision` and `protocol.sampling.top_p` are no longer listed: both were resolved
+in Phase 5.4, which is exactly the behaviour the field is for — a gap disappears when, and only
+when, the value is actually decided. `git.dirty` clears once the Phase 5.4 work is committed.
 
 **The seal is enforced at declaration.** `--arm training --split heldout` exits 2 and writes
 nothing, so a run that intended to train on the held-out split cannot even be declared
@@ -239,9 +255,11 @@ Following the rule that a claim needs a command behind it:
 
 - **No run has used this protocol.** Every config carries `status: NEVER_EXECUTED`. The
   protocol is internally consistent and test-enforced; it is not validated on hardware.
-- **The model revision is unidentified**, so "the same model" is currently unverified across
-  time (§2.5).
-- **`top_p` is one sampler setting away from a confound** if it is set in one arm only.
+- **The model revision is identified but unused.** `model.revision` pins the commit sha of the
+  cached snapshot; that pin has not been exercised by a load.
+- **`top_p` is now configured in both arms** (resolved 2026-11-04, `sampling.top_p: 1.0`);
+  the remaining sampler confound risk is that the trainer's runtime acceptance of the key is
+  unproven (§6).
 - **Five iterations is a smoke, not a result.** A score from it says the pipeline works, not
   that the model improved. Per `AGENT_BUILD_SPEC.md` §1.2, a parameter change is not a model
   improvement.
@@ -253,7 +271,79 @@ Following the rule that a claim needs a command behind it:
 
 ---
 
-## 6. Change control
+## 6. Readiness, stated as two different questions
+
+These are separated because conflating them is the failure this section exists to prevent: a
+rollout-only pilot needs no trainer, so "the pilot is config-ready" says nothing about whether
+training can run, and "training is blocked" says nothing about whether the pilot can.
+
+### 6.1 Rollout-only pilot — config-ready
+
+`configs/training/pilot_rollouts_1p5b.yaml`. This run samples the base model, scores with
+credit, and writes traces. It performs **no parameter update** and does not depend on NeMo RL
+being installed, parsed, or importable.
+
+| # | Item | Value | Where |
+| --- | --- | --- | --- |
+| 1 | Model revision pinned | `2e1fd397ee46e1388853d2af2c993145b0f1098a` | `model.revision` |
+| 2 | Temperature explicit | `1.0` | inherited from protocol; asserted by parity tests |
+| 3 | Top-p explicit | `1.0` | protocol + baseline, both arms |
+| 4 | Sequence budget explicit | `8192` | `model.max_seq_length` |
+| 5 | Optimizer disabled | `optimizer_enabled: false` | asserted by test |
+| 6 | Training iterations zero | `training_iterations: 0` | asserted by test |
+| 7 | Held-out disabled | `heldout_enabled: false` | asserted by test |
+| 8 | `reward_v1` live | `reward.live: reward_v1` | `rewards/compose.py` is the live path |
+| 9 | `reward_v2` offline only | not imported by any live path | `rewards/v2.py` |
+| 10 | Training task selected | **`tasks: null`** — deliberate, see below | `pilot_rollouts_1p5b.yaml` |
+
+**Item 10 is an honest gap, not a satisfied one.** The pilot does not name a task because
+inventing a task ID would be inventing the thing the run is supposed to measure. The pilot is
+therefore *config-complete* and *not launch-ready* until a task is named; that is a one-value
+decision, not a code change.
+
+The pilot needs **no** NeMo RL field at all: it does not construct a `PolicyConfig`, so the
+`policy.max_total_sequence_length` / `max_model_len` mapping below is not its concern.
+
+### 6.2 Formal NeMo RL training — still BLOCKED
+
+`configs/training/grpo_nemo_rl_a5000.yaml`. Every key below now has a cited source, and none
+of it has been executed. **This document does not claim formal training readiness.**
+
+The blockers, each independently sufficient:
+
+1. **Pinned NeMo RL is not available in a compatible environment.** It requires
+   `>=3.13.13,<3.14`; this workspace runs 3.12 and NeMo RL is not installed
+   (`import nemo_rl` → `ModuleNotFoundError`).
+2. **The actual config loader has never parsed the trainer YAML.** `policy` is a raw
+   `TypedDict` inside `MasterConfig(extra="allow")`, so a misplaced key is *not* rejected at
+   load — and the runtime consumers use direct subscripts, so a missing one is a `KeyError` at
+   first use rather than a validation error at startup. Only a real parse settles this.
+3. **Runtime sampling settings are unconfirmed.** `temperature` / `top_p` at
+   `policy.generation.*` are source-grounded; that the loader accepts them is not observed.
+4. **Runtime sequence-length settings are unconfirmed.** `max_total_sequence_length: 8192` and
+   `vllm_cfg.max_model_len: 8192` are source-grounded; that a run at 8192 does not OOM on the
+   target card is not observed.
+5. **No parser-only or config-only smoke test has passed**, because it cannot be run here.
+
+The sequence-length mapping itself is settled (§6.3). What is *not* settled is that the pinned
+runtime accepts it — a different claim, and the remaining blocker.
+
+### 6.3 The sequence-length mapping, as applied
+
+| Concept | Field | Value | Limits |
+| --- | --- | --- | --- |
+| Protocol budget | `model.max_seq_length` | 8192 | the arm-independent number |
+| **Total** prompt + completion | `policy.max_total_sequence_length` | 8192 | a whole trajectory |
+| **Engine** context capacity | `policy.generation.vllm_cfg.max_model_len` | 8192 | what vLLM can hold |
+| **Completion** only | `policy.generation.max_new_tokens` | **unset** | not defined by the protocol |
+
+`max_new_tokens` is unset on purpose: it caps generation only, the protocol defines no
+completion budget, and copying `max_total_sequence_length` into it would be inventing a
+protocol value. The three are not interchangeable.
+
+---
+
+## 9. Change control
 
 Once a run has been recorded against this protocol, the way to change a value is:
 

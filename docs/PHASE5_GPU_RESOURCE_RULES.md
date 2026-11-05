@@ -1,11 +1,15 @@
 # Phase 5.3 — GPU resource rules
 
-**Status: a rulebook, not a report.** Nothing in this file was measured on the training box.
-It sets out what a session must do to its GPUs, so that a run is reproducible and so that the
-other person using this machine is not affected by it. Every command below is written to be
-pasted; none of them has been executed by whoever wrote this repository, which was built on a
-CPU-only Windows machine (see
+**Status: a rulebook being executed for the first time.** The rules below were written on a
+CPU-only Windows machine that could not run any of them (see
 [docs/decisions/0001-build-machine-has-no-nvidia-gpu.md](decisions/0001-build-machine-has-no-nvidia-gpu.md)).
+Phase 6 runs on the Linux host (2 × RTX A6000), so the commands are now executable and §0's
+"never executed" caveat no longer holds for the Phase 6 baseline run — see
+[docs/PHASE6_BASELINE_EVALUATION.md](PHASE6_BASELINE_EVALUATION.md) for what was actually
+measured. The rules themselves are unchanged; pasting them is still the requirement.
+
+It sets out what a session must do to its GPUs, so that a run is reproducible and so that the
+other person using this machine is not affected by it.
 
 The nine rules come from the Phase 5.3 checklist in
 [docs/CURRENT_PROJECT_STATUS.md](CURRENT_PROJECT_STATUS.md). Each is stated as a rule, given a
@@ -16,7 +20,14 @@ records it (`scripts/run_manifest.py`, Phase 5.2).
 
 ## 0. Why this is a document and not a checklist of good intentions
 
-An A5000 with 24 GB is one card here, shared by two people. Every failure mode below is silent:
+The execution host is a two-card machine (2 × RTX A6000, ~48 GB each), of which **one card is
+ours**. This project was designed against a 24 GB A5000 budget, and the settings that budget
+produced — group size 4, `max_seq_length` 8192, `gpu_memory_utilization` 0.4, concurrency 1 —
+are deliberately unchanged (see `configs/training/protocol_1p5b.yaml` §hardware). The larger
+card is not a licence to raise them mid-experiment; it means the headroom exists and is
+unused, which is a different and safer position than the one this rulebook was written for.
+
+Every failure mode below is silent:
 
 - a job on the wrong device does not error — it runs, slowly, and fights the other user for
   memory until one of you gets an OOM an hour in;

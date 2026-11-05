@@ -1,0 +1,232 @@
+# Rollout-only pilot protocol - 1.5B arm. Phase 5.4, step 7.
+#
+# ############################################################################
+# ##  STATUS: NEVER EXECUTED.                                               ##
+# ##  No rollout has been collected. This file is a dry-run manifest input:  ##
+# ##  it describes a run that collects behavioural variation and performs    ##
+# ##  NO parameter update.                                                   ##
+# ############################################################################
+#
+# WHY THIS FILE EXISTS, AND WHY IT IS SEPARATE
+#
+# The first thing the project needs from the training box is not a trained model. It is
+# evidence that the harness runs end to end on the real card at the real sequence length
+# and produces traces the analysis can read. That is a rollout-only run: sample the base
+# model on real tasks, score with reward_v1, write traces. If that is already broken, an
+# expensive GRPO run measures the breakage rather than the reward.
+#
+# It is a SEPARATE FILE and not an edit to configs/training/protocol_1p5b.yaml because the
+# formal protocol is frozen and hashed into every manifest. Making the pilot a variant of it
+# would mean either editing the frozen file before the experiment runs (defeating the point
+# of freezing it) or recording the pilot as if it were the experiment. A reader comparing
+# hashes must be able to see that these are different declared runs.
+#
+# WHAT THIS FILE DELIBERATELY DOES NOT DO
+#
+#   * it does not enable the optimiser - training_iterations is 0 and optimizer_enabled is
+#     false, and a test asserts both, so a pilot cannot silently become a training run;
+#   * it does not name a task or split - `tasks` is null, because inventing a task ID would
+#     be inventing the thing the run is supposed to measure;
+#   * it does not touch the held-out split - heldout_enabled is false and the manifest CLI
+#     refuses to combine a held-out split with a training arm;
+#   * it does not declare an output checkpoint, because a rollout-only run produces none.
+#
+# PROVENANCE VOCABULARY - identical to protocol_1p5b.yaml, and repeated here because this
+# file may be read on its own:
+#
+#   GROUNDED    copied from a file or source in this repository, named in the comment
+#   CHOSEN      a deliberate choice with no upstream authority; the comment says why
+#   ASSUMPTION  a value we expect to be wrong and must measure; the comment says what
+#   null        NOT YET DECIDED. A null is a visible gap, not a silent default.
+
+meta:
+  name: pilot_rollouts_1p5b
+  status: NEVER_EXECUTED
+  # Same machine-readable marker the safety scan uses. This file has no `grpo` section and
+  # configures no trainer, so the "whose trainer schema is this?" question does not apply;
+  # declaring it explicitly keeps that answer a declaration rather than an inference.
+  kind: arm_independent_protocol
+  role: rollout-only pilot - collect traces from the base model, with no parameter update
+  model_tier: 1.5B
+  written: 2026-11-04
+  # The formal experiment this pilot precedes. Recorded so a reader can find the frozen
+  # protocol without having to know the naming convention.
+  formal_protocol: configs/training/protocol_1p5b.yaml
+
+# --------------------------------------------------------------------------- purpose
+purpose:
+  # GROUNDED as a description of intent, not of behaviour: nothing here has run.
+  goal: collect behavioural variation from the base model before any training happens
+  # What makes this a pilot rather than an experiment. Stated as a claim the tests check.
+  performs_parameter_update: false
+  # The specific questions a pilot answers. If a pilot finishes and cannot answer these,
+  # it was not worth the GPU time.
+  answers:
+    - does the harness complete an episode end to end on the real card
+    - do the traces parse against analysis/trace_schema.json
+    - does reward_v1 produce a spread of scores, or does every task score the same
+    - how long does one rollout take, so the real run can be sized
+
+# --------------------------------------------------------------------------- model
+model:
+  # GROUNDED: configs/eval/baseline.yaml and configs/training/grpo_nemo_rl_a5000.yaml agree.
+  name: Qwen/Qwen2.5-Coder-1.5B-Instruct
+  # GROUNDED 2026-11-04, carried from protocol_1p5b.yaml: the immutable commit sha of the
+  # snapshot verified present in the local Hugging Face cache. Copied rather than
+  # re-derived so that a pilot and the experiment provably load the same weights - if
+  # these two values ever differ, the pilot measured a different model than the experiment.
+  revision: 2e1fd397ee46e1388853d2af2c993145b0f1098a
+  # GROUNDED: both arm configs quantise. Kept here so the pilot exercises the same
+  # quantisation path the trained arm will, which is one of the things a pilot is for.
+  load_in_4bit: true
+  # GROUNDED: both arm configs agree.
+  #
+  # SEQUENCE BUDGET, and where it maps. This is the same arm-independent total budget as
+  # configs/training/protocol_1p5b.yaml `model.max_seq_length`. The pilot runs the model
+  # directly through the environment and performs no parameter update, so it does not load
+  # NeMo RL's `PolicyConfig` and there is no `policy.max_total_sequence_length` or
+  # `policy.generation.vllm_cfg.max_model_len` for it to set - this field is the pilot's
+  # only sequence-length knob, and it already carries the protocol value, so no mapping is
+  # needed and none is invented. (A formal NeMo RL run would additionally need the engine
+  # capacity key; that is the trainer config's concern, not the pilot's.)
+  max_seq_length: 8192
+
+# --------------------------------------------------------------------------- LoRA
+# Present, and inert. The adapter shape is recorded so the pilot's manifest is comparable
+# with the experiment's, but nothing is trained: a LoRA config with no optimiser step
+# describes the container, not an update.
+lora:
+  # GROUNDED: configs/training/protocol_1p5b.yaml `lora.r`.
+  r: 32
+  lora_alpha: 64
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  random_state: 42
+  # CHOSEN: stated so nobody reads the block above as "the pilot trains a LoRA".
+  applied: false
+
+# --------------------------------------------------------------------------- rollouts
+rollouts:
+  # CHOSEN - PILOT SCOPE. 8 rollouts per task, double the experiment's group of 4, because
+  # the pilot's job is to show the *distribution* of behaviour, not to feed a group-relative
+  # advantage. Twice the samples gives a usable spread estimate from few tasks. This is a
+  # pilot parameter and must not drift into the experiment's protocol.
+  group_size: 8
+  # null - NOT DECIDED, and deliberately not invented. A task ID written here would have to
+  # be authorised against benchmark/data/ and the leakage tests; guessing one would make the
+  # manifest name a task nobody approved. Phase 5.4 leaves this as a visible gap.
+  tasks: null
+  # CHOSEN: enough tasks that a single pathological task cannot look like a harness failure,
+  # few enough that the pilot stays cheap. Independent of `tasks` being null - this is the
+  # count to select, not a selection.
+  n_tasks: 4
+  # DERIVED from group_size, recorded so it cannot drift.
+  rollouts_per_task: 8
+
+# --------------------------------------------------------------------------- sampling
+sampling:
+  # GROUNDED: identical to protocol_1p5b.yaml, which the parity tests pin against both arms.
+  temperature: 1.0
+  # GROUNDED: identical to protocol_1p5b.yaml and set explicitly in both arms. The pilot
+  # must sample the way the experiment will, or its timing and its score distribution
+  # describe a different run.
+  top_p: 1.0
+  # GROUNDED: configs/eval/baseline.yaml `sampling.seed`.
+  seed: 42
+
+# --------------------------------------------------------------------------- episode budget
+episode:
+  # GROUNDED: from each task's own task.yaml, exactly as both arms do. A pilot that
+  # hard-coded a turn budget would not be testing the budget the experiment will use.
+  max_turns: from_task_yaml
+  max_tool_calls: from_task_yaml
+  # CHOSEN - SAFETY NET. A wall-clock ceiling per rollout so one hung tool call cannot
+  # consume the pilot's whole slot. This is what would have caught the failure mode the
+  # pilot exists to detect, so it is part of the pilot rather than a later hardening.
+  timeout_s_per_rollout: 600
+  # CHOSEN: how long to wait for a single tool call before treating the episode as failed.
+  tool_call_timeout_s: 120
+
+# --------------------------------------------------------------------------- training
+# Explicitly disabled. This block exists to be checked, not used.
+training:
+  # CHOSEN - THE DEFINING PROPERTY OF A PILOT. Zero iterations means the optimiser never
+  # takes a step. A test asserts this is 0 and not merely small.
+  training_iterations: 0
+  # The same claim in the form a run-manifest reader looks for first.
+  optimizer_enabled: false
+  # CHOSEN: with no optimiser there is nothing to checkpoint, and expecting an output file
+  # would make a correct pilot look like a failed run at `--finish`.
+  expect_output_checkpoint: false
+
+# --------------------------------------------------------------------------- reward
+reward:
+  # GROUNDED: rewards/compose.py is what envs/coding_env/verifier.py imports. The pilot
+  # scores with the same reward the experiment does; that is part of what it validates.
+  live: reward_v1
+  # CHOSEN: reward_v2 is computed offline over recorded rollouts and is not imported by any
+  # live path. A pilot is precisely the run whose traces v2 would later be computed over, so
+  # the boundary is stated rather than assumed.
+  offline_only: reward_v2
+  reward_v2_computed_inline: false
+  # GROUNDED: ADR 0006.
+  range: [-1.0, 1.0]
+
+# --------------------------------------------------------------------------- GRPO objective
+# Recorded, and not exercised. A rollout-only run computes no advantage and applies no clip;
+# the values are carried so a reader can confirm the pilot's manifest is comparable with the
+# experiment's, and so `grpo.kl_coefficient` continues to appear in `unresolved` for the
+# same honest reason.
+grpo:
+  # CHOSEN: no advantage is computed in a pilot, so no estimator is used.
+  advantage_estimator: not_applied
+  clip_epsilon: null
+  # NOT APPLICABLE for the same reason as in protocol_1p5b.yaml: no reference policy exists,
+  # so there is no KL term. Recorded as a null with a closed-question status, and explicitly
+  # NOT a pilot blocker.
+  kl_coefficient: null
+  kl_coefficient_status: NOT_APPLICABLE_CURRENT_IMPLEMENTATION
+  kl_coefficient_reason: no reference-policy KL term exists in the current controlled GRPO-style implementation
+
+# --------------------------------------------------------------------------- data
+data:
+  # GROUNDED: docs/heldout_seal.md. A pilot is a training-side activity and is on that side
+  # of the seal.
+  split: train
+  validation_from: train
+  # The seal, restated where the pilot's own settings live. The manifest CLI independently
+  # refuses `--arm training --split heldout`.
+  heldout_enabled: false
+  # CHOSEN: a pilot writes traces and no result. Describing it as producing a result would
+  # invite it being cited as one.
+  produces_result: false
+
+# --------------------------------------------------------------------------- hardware
+hardware:
+  # GROUNDED: nvidia-smi on the execution host, 2026-11-04 - two RTX A6000 at 49140 MiB each.
+  # The pilot uses one of them. The A5000/24 GB figure this project was designed against is
+  # retained below as history, not as a description of the current machine.
+  target_gpu: RTX A6000 (48 GB)
+  historical_design_target_gpu: RTX A5000 (24 GB)
+  # GROUNDED: set explicitly rather than relying on the default, because CUDA_VISIBLE_DEVICES
+  # remaps indices rather than filtering them - leaving it unset makes `cuda:0` mean physical
+  # GPU 0 only by luck of enumeration order.
+  cuda_visible_devices: "0"
+  # CHOSEN - SERIAL EXECUTION. One rollout at a time. The A6000 could hold more, and this is
+  # deliberately not raised: a memory problem should be attributable to a single episode
+  # rather than to whatever else happened to be running, and the pilot's job is to measure
+  # the harness, not to find the ceiling.
+  concurrency: 1
+  # CHOSEN: the pilot must shut its server down when it finishes. A left-running vLLM process
+  # holds VRAM that the next run then fails to allocate, which reads as an OOM that is not one.
+  shutdown_required: true
+  # CHOSEN: fail rather than silently swap in a different device.
+  require_gpu: true
+
+# --------------------------------------------------------------------------- observability
+observability:
+  # GROUNDED: both arms and the analysis already use this schema.
+  trace_schema: analysis/trace_schema.json
+  # CHOSEN: written under results/, which is gitignored, so a pilot leaves no tracked artefact.
+  writes_traces: true
+  # CHOSEN: the manifest is written to the run directory, not to a shared location.
+  manifest_per_run: true
