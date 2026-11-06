@@ -84,6 +84,15 @@ from analysis.context_budget import (  # noqa: E402
     preflight,
     reward_eligible_rows,
 )
+from analysis.sampling_seeds import (  # noqa: E402
+    SAMPLING_SEED_DERIVATION,
+    SeedDerivationError,
+    assert_unique_seeds,
+    derive_rollout_seed,
+    derive_turn_seed,
+    plan_digest,
+    plan_seeds,
+)
 from analysis.trace import (  # noqa: E402
     SCHEMA_VERSION,
     Timer,
@@ -105,6 +114,28 @@ log = logging.getLogger("phase6.collect")
 
 class CollectorError(RuntimeError):
     """A precondition the collector refuses to run without."""
+
+
+class SeedPlanError(CollectorError):
+    """The planned sampling seeds are unusable, so the batch would not be independent.
+
+    `analysis.sampling_seeds.SeedDerivationError` is a `ValueError` about the inputs; this is
+    the collector's own error about the *batch*. They are kept separate so a caller can tell
+    "you passed a bad seed to the derivation" from "this run cannot produce independent
+    rollouts", and so the CLI reports the second with a config-level message rather than a
+    traceback from inside a pure function.
+    """
+
+
+class ResumeFileError(CollectorError):
+    """A persisted rollouts file cannot be safely resumed from.
+
+    Raised for every resume condition that is not a clean interrupted append: a malformed
+    line that is not the final one, a duplicate `rollout_id`, an unidentifiable trailing
+    fragment, or rows belonging to another run. Resuming from such a file would mean
+    guessing which evidence was real, and a guessed batch is not reproducible - so the
+    collector refuses and asks for a new `run_id` instead.
+    """
 
 
 class UniformRewardError(CollectorError):
@@ -197,6 +228,40 @@ class BaselineConfig:
     @property
     def seed(self) -> int:
         return int(self._get("sampling.seed"))
+
+    @property
+    def seed_policy(self) -> str:
+        """How `sampling.seed` maps onto individual model requests.
+
+        `per_rollout` (the default, and the only value Phase 6H plans) derives one seed per
+        `(task_id, rollout_index)` and sends it on every turn of that rollout.
+        `per_turn` derives a further seed per turn from the rollout seed.
+        `literal` reproduces the pre-6H behaviour of sending `sampling.seed` verbatim on
+        every request; it is retained only so a historical config is still interpretable,
+        and a run using it can never be called a multi-rollout baseline.
+        """
+        value = self._get("sampling.seed_policy")
+        allowed = {"per_rollout", "per_turn", "literal"}
+        if value not in allowed:
+            raise CollectorError(f"sampling.seed_policy is {value!r}; expected one of {sorted(allowed)}")
+        return str(value)
+
+    @property
+    def seed_derivation(self) -> str:
+        """The derivation label this run intends to use.
+
+        Checked against `analysis.sampling_seeds.SAMPLING_SEED_DERIVATION` before the first
+        model call. A config naming a different algorithm would produce seeds the recorded
+        label cannot explain, so the mismatch is refused rather than recorded.
+        """
+        value = self._get("sampling.seed_derivation")
+        if value != SAMPLING_SEED_DERIVATION:
+            raise CollectorError(
+                f"sampling.seed_derivation is {value!r} but this code derives seeds as "
+                f"{SAMPLING_SEED_DERIVATION!r}. Re-deriving under a different algorithm would "
+                "silently change every rollout's sample; update the config deliberately."
+            )
+        return str(value)
 
     @property
     def max_tokens_per_turn(self) -> int:
@@ -572,6 +637,199 @@ def _task_instruction(task: Any) -> str:
     return text
 
 
+def _request_seed(
+    cfg: BaselineConfig,
+    *,
+    task_id: str,
+    rollout_index: int,
+    turn_index: int | None = None,
+) -> int:
+    """The seed to send on a model request, per `sampling.seed_policy`.
+
+    This is the single place the request seed is decided, so there is exactly one answer to
+    "what seed did that request carry?" and it is the same answer the row records.
+
+    * `per_rollout` - one derived seed per rollout, repeated on every turn. The serving API
+      `seed` field is request-level, so a rollout is only reproducible as a whole if each of
+      its requests carries the same seed.
+    * `per_turn` - `turn_index` must be supplied; the per-turn seed is derived from the
+      rollout seed, not from the base seed, so a rollout stays a coherent unit.
+    * `literal` - `cfg.seed` verbatim. Reproduces pre-6H behaviour, in which every rollout
+      of every task is the same sample; refused for any plan with more than one rollout
+      (see `_assert_seed_policy_usable`).
+    """
+    policy = cfg.seed_policy
+    if policy == "literal":
+        return cfg.seed
+    rollout_seed = derive_rollout_seed(cfg.seed, task_id, rollout_index)
+    if policy == "per_rollout":
+        return rollout_seed
+    if turn_index is None:
+        raise CollectorError("sampling.seed_policy is 'per_turn' but no turn_index was supplied")
+    return derive_turn_seed(rollout_seed, turn_index)
+
+
+def _assert_seed_policy_usable(cfg: BaselineConfig, *, n_rollouts: int) -> None:
+    """Refuse a seed policy that cannot yield independent rollouts.
+
+    A `literal` policy sends one seed on every request, so a "multi-rollout baseline" under
+    it is one sample measured `n_rollouts` times. Phase 6G did exactly that, and its uniform
+    -1.0 cannot be read as a statement about the model for that reason: one observation
+    repeated four times is not a sample of four. The model may still score -1.0 on all four
+    independent samples. The guard is here rather than in docs because the failure is silent:
+    nothing about the artifacts looks wrong.
+    """
+    if cfg.seed_policy == "literal" and n_rollouts > 1:
+        raise CollectorError(
+            f"sampling.seed_policy is 'literal' with {n_rollouts} rollouts per task: every rollout "
+            "would send the same seed and be the same sample. Set the policy to 'per_rollout' to "
+            "derive an independent seed per rollout."
+        )
+
+
+def _rollouts_path(cfg: BaselineConfig) -> Path:
+    """Where this run's public rows are written.
+
+    Deliberately `cfg.output_path("rollouts")` and not a path assembled from a run-id
+    directory: the `output.*` keys already name the full path, so building `output_dir /
+    run_id / "rollouts.jsonl"` here would disagree with `_persist_evidence` and `--resume`
+    would silently find nothing and re-sample the whole batch.
+    """
+    return cfg.output_path("rollouts")
+
+
+def _truncate_to_last_newline(path: Path) -> int:
+    """Cut `path` back to its last complete line, flush it and fsync it.
+
+    Returns the offset the file was truncated to, which equals its new size.
+
+    Resuming with a dangling partial line in place is not enough. The collector later
+    *rewrites* `rollouts.jsonl` from the in-memory rows, so the fragment would disappear
+    anyway - but only after `_persist_evidence`. If the resumed collector reads a fragment,
+    re-samples the missing rollout and then dies before persisting, the file still holds the
+    fragment, and the next resume has to re-derive the same conclusion from a file that has
+    been silently growing tail garbage. Repairing the file once, at the moment the fragment
+    is identified, leaves every subsequent attempt with a well-formed JSONL to reason about.
+
+    Truncation is to a byte offset and not a rewrite because the bytes before that offset
+    were already fsynced; rewriting them would risk damaging evidence to repair a tail.
+    """
+    data = path.read_bytes()
+    if not data or data.endswith(b"\n"):
+        return len(data)
+    cut = data.rfind(b"\n") + 1  # 0 when there is no newline at all: the whole file goes
+    with path.open("r+b") as handle:
+        handle.truncate(cut)
+        handle.flush()
+        os.fsync(handle.fileno())
+    # fsync the directory too: on a crash the truncate itself must be durable, not just the
+    # data, or a resume could observe the old size with the new content.
+    dir_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+    return cut
+
+
+def _load_persisted(cfg: BaselineConfig) -> dict[str, dict[str, Any]]:
+    """Rows a previous attempt of this run already persisted, keyed by rollout_id.
+
+    Only `rollouts.jsonl` is consulted. A row is the durable record of a finished episode;
+    the private log is written alongside it but is not the source of truth for resume.
+
+    The loader is strict on purpose. One malformed shape *is* recoverable - an interrupted
+    append, which leaves a partial object after the last newline with no trailing newline -
+    and it is repaired here by truncating the file to that boundary. Everything else is
+    refused, because each of the alternatives silently discards or corrupts evidence:
+
+    * a malformed line followed by more content is not an interrupted append. The file was
+      written by something else, or edited; dropping that line would re-sample a rollout
+      whose row may still be referenced elsewhere, and keep rows of unknown provenance.
+    * a duplicate `rollout_id` means two different rows claim the same episode. Last-wins
+      would let a later line override the seed and reward the earlier one recorded.
+    * rows whose `run_id` differs are another batch's evidence. Dropping them silently is
+      how a mixed directory becomes a "resumed" run with fewer rollouts than it reports.
+    * a trailing fragment that cannot be identified as a partial row (no `{`, or it parses
+      but is not an object) is not something truncation should be applied to blind.
+    """
+    path = _rollouts_path(cfg)
+    if not path.exists():
+        return {}
+
+    raw = path.read_bytes()
+    if not raw:
+        return {}
+
+    # Split on the newline byte, keeping track of whether the file ends with one. The last
+    # element after `split` is either `b""` (clean file) or the unterminated tail.
+    pieces = raw.split(b"\n")
+    trailing = pieces.pop()  # b"" when the file ended with a newline
+    repaired_tail = False
+    if trailing:
+        # No trailing newline: the final element is an interrupted append, or corruption.
+        if not trailing.lstrip().startswith(b"{"):
+            raise ResumeFileError(
+                f"{path} ends with an unterminated fragment that does not begin a JSON object; "
+                "this is corruption, not an interrupted append. Start a new run_id."
+            )
+        try:
+            json.loads(trailing)
+        except json.JSONDecodeError:
+            repaired_tail = True
+        else:
+            # It parses, so it is a complete row that merely lacks the newline. Keep it and
+            # terminate the line rather than discarding a finished rollout.
+            pieces.append(trailing)
+            with path.open("ab") as handle:
+                handle.write(b"\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            log.info("resume: terminated a final row in %s that lacked a trailing newline", path)
+
+    if repaired_tail:
+        offset = _truncate_to_last_newline(path)
+        log.warning(
+            "resume: discarded an interrupted append in %s and truncated the file to %d byte(s); "
+            "that rollout will be re-sampled",
+            path,
+            offset,
+        )
+
+    persisted: dict[str, dict[str, Any]] = {}
+    for lineno, chunk in enumerate(pieces, start=1):
+        if not chunk.strip():
+            continue
+        try:
+            row = json.loads(chunk)
+        except json.JSONDecodeError as exc:
+            # Every remaining candidate is terminated, so this is a malformed line in the
+            # middle of the file: not recoverable, and not the interrupted-append shape.
+            raise ResumeFileError(
+                f"{path} line {lineno} is not valid JSON ({exc.msg}); a malformed row before the end of "
+                "the file is corruption, not an interrupted append. Start a new run_id."
+            ) from exc
+        if not isinstance(row, dict):
+            raise ResumeFileError(f"{path} line {lineno} is not a JSON object")
+        run_id = row.get("run_id")
+        if run_id != cfg.run_id:
+            raise ResumeFileError(
+                f"{path} line {lineno} belongs to run_id {run_id!r}, not {cfg.run_id!r}. "
+                "A run_id identifies one batch, so rows from another run are a layout mistake; "
+                "point --resume at this run's own directory or start a new run_id."
+            )
+        rollout_id = row.get("rollout_id")
+        if not isinstance(rollout_id, str) or not rollout_id:
+            raise ResumeFileError(f"{path} line {lineno} has no usable rollout_id")
+        if rollout_id in persisted:
+            raise ResumeFileError(
+                f"{path} contains rollout_id {rollout_id!r} more than once. Keeping either copy would "
+                "mean guessing which one is the recorded episode; start a new run_id."
+            )
+        persisted[rollout_id] = row
+    return persisted
+
+
 def run_one_rollout(
     *,
     cfg: BaselineConfig,
@@ -593,7 +851,16 @@ def run_one_rollout(
     `tokenizer` is required for exact context budgeting. When it is None the first turn
     produces an `infrastructure_error` row rather than a model call: an unmeasurable
     prompt cannot be sent safely, and guessing would recreate the Phase 6 bring-up 400s.
+
+    `rollout_index` used to be accepted and ignored, which is how Phase 6G produced four
+    identical rollouts from one seed. It now feeds `derive_rollout_seed`, so the sampling
+    seed is a function of `(cfg.seed, task.id, rollout_index)` and every rollout samples
+    differently while remaining reproducible from its own row.
     """
+    # Derived once, before the first model call, so the value recorded in the row is by
+    # construction the value the requests used.
+    sampling_seed = _request_seed(cfg, task_id=task.id, rollout_index=rollout_index)
+
     timer = Timer.start()
     session = EpisodeSession.open(task)
     max_turns = session.max_turns
@@ -695,7 +962,11 @@ def run_one_rollout(
                     temperature=cfg.temperature,
                     top_p=cfg.top_p,
                     max_tokens=cfg.max_tokens_per_turn,
-                    seed=cfg.seed,
+                    seed=(
+                        sampling_seed
+                        if cfg.seed_policy == "per_rollout"
+                        else _request_seed(cfg, task_id=task.id, rollout_index=rollout_index, turn_index=turns_used)
+                    ),
                     timeout=max(30.0, deadline - time.monotonic()),
                 )
             except Exception as e:  # the server is a dependency; its failure is recorded
@@ -802,7 +1073,12 @@ def run_one_rollout(
         # The baseline arm loads no adapter, so this is null by definition rather than by
         # omission - and the row says so.
         checkpoint_id=None,
-        random_seed=cfg.seed,
+        random_seed=sampling_seed,
+        base_seed=cfg.seed,
+        sampling_seed=sampling_seed,
+        sampling_seed_derivation=cfg.seed_derivation,
+        rollout_index=rollout_index,
+        seed_policy=cfg.seed_policy,
         prompt_config_version=cfg.prompt_version,
         candidate_patch=patch,
         token_usage=tokens if tokens["total"] else None,
@@ -881,11 +1157,18 @@ def collect(
     allow_uniform: bool = False,
     tokenizer: Any = None,
     task_ids_override: list[str] | None = None,
+    resume: bool = False,
 ) -> dict[str, Any]:
     """Collect the batch and return a summary. Raises `UniformRewardError` if required.
 
     Raises `InfrastructureNotReadyError` before the first request when no tokenizer is
     available, and after the loop when a run-level guard shows the batch is not evidence.
+
+    `resume=True` keeps rollouts a previous attempt of the same `run_id` already persisted,
+    and re-derives their seeds to prove the batch is still one derivation. A run that
+    re-sampled everything on resume would silently discard GPU time; a run that stitched two
+    different derivations together would silently produce an unreproducible batch. This does
+    neither: it reuses matching rows and refuses mismatched ones.
     """
     if tokenizer is None:
         # Fail closed before touching the server: without exact token counts every request
@@ -904,18 +1187,72 @@ def collect(
         task_ids = list(task_ids_override)
     per_task = rollouts_override or cfg.rollouts_per_task
 
+    # Decide every rollout's sampling seed up front, before the server is contacted. Two
+    # things are established here and nowhere else:
+    #
+    #   1. The plan is collision-free (`assert_unique_seeds`). A collision means two
+    #      "independent" rollouts are one sample recorded twice - the Phase 6G failure - so
+    #      it must be caught by arithmetic rather than discovered in the results.
+    #   2. The policy can actually produce independence (`_assert_seed_policy_usable`). A
+    #      `literal` policy with N>1 rollouts is the same bug written in the config.
+    #
+    # Both checks run before `check_server`, so a misconfigured run costs nothing.
+    plan = plan_seeds(cfg.seed, task_ids, per_task)
+    try:
+        assert_unique_seeds(plan)
+    except SeedDerivationError as e:
+        # A collision is a harness-level refusal, not a value error at a call site: the
+        # question it answers is "can this batch be collected?", not "was this argument
+        # valid?". Translated so the CLI exits 2 with a message instead of a traceback.
+        raise SeedPlanError(str(e)) from e
+    _assert_seed_policy_usable(cfg, n_rollouts=per_task)
+    seeds = {(str(e["task_id"]), int(e["rollout_index"])): int(e["sampling_seed"]) for e in plan}  # type: ignore[arg-type]
+    log.info(
+        "seed plan: base_seed=%d policy=%s derivation=%s %d rollout(s) digests=%s",
+        cfg.seed,
+        cfg.seed_policy,
+        cfg.seed_derivation,
+        len(plan),
+        plan_digest(plan),
+    )
+
+    # Resume: rollouts already persisted by a previous attempt of this same run are copied
+    # forward rather than re-sampled. The persisted seed is re-derived and compared, because
+    # a row carrying a seed this run would not have produced means the batch is a mixture of
+    # two derivations - reproducible as neither.
+    persisted = _load_persisted(cfg) if resume else {}
+    if persisted:
+        log.info("resuming: %d rollout(s) already persisted", len(persisted))
+
     served = check_server(cfg)
     log.info("server %s serves %s", cfg.base_url, served)
 
     rows: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     private: list[dict[str, Any]] = []
+    reused = 0
 
     started = time.monotonic()
     for task_id in task_ids:
         task = find_task(task_id, split=cfg.split)
         for index in range(per_task):
             rollout_id = f"{cfg.run_id}__{task_id}__r{index:02d}"
+
+            if rollout_id in persisted:
+                row = persisted[rollout_id]
+                expected = seeds[(task_id, index)]
+                recorded = (row.get("agent") or {}).get("sampling_seed")
+                if recorded is not None and int(recorded) != expected:
+                    raise CollectorError(
+                        f"resume mismatch for {rollout_id}: persisted sampling_seed {recorded} but this run "
+                        f"derives {expected} from base_seed={cfg.seed} under {cfg.seed_derivation}. "
+                        "Re-deriving would mix two derivations in one batch; start a new run_id instead."
+                    )
+                rows.append(row)
+                reused += 1
+                log.info("[resume] %s kept from a previous attempt", rollout_id)
+                continue
+
             log.info(
                 "[%s/%s] %s rollout %d/%d", task_ids.index(task_id) + 1, len(task_ids), task_id, index + 1, per_task
             )
@@ -971,6 +1308,24 @@ def collect(
         "split": cfg.split,
         "tasks": task_ids,
         "rollouts_per_task": per_task,
+        # ---- seed provenance (Phase 6H) --------------------------------------------
+        # The summary is where a reader looks to decide whether a batch is reproducible,
+        # so the derivation is stated here rather than left to be inferred from the rows.
+        # `per_rollout` is written explicitly: a summary claiming 4 rollouts while all four
+        # shared one seed (Phase 6G) was technically consistent and completely misleading.
+        "sampling_seeds": {
+            "base_seed": cfg.seed,
+            "sampling_seed_derivation": cfg.seed_derivation,
+            "seed_policy": cfg.seed_policy,
+            "per_rollout": cfg.seed_policy != "literal",
+            "n_distinct_sampling_seeds": len({int(row["agent"]["sampling_seed"]) for row in rows if row.get("agent")}),
+            "plan_digest": plan_digest(plan),
+            # The full mapping, not just the digest: a digest cannot be inverted, and the
+            # first question about an unreproducible batch is "which seed did rollout 2 of
+            # this task use?". Small enough to inline for a batch of this size.
+            "plan": plan,
+            "resumed_rollouts": reused,
+        },
         "n_rollouts": len(rows),
         "n_reward_eligible": len(eligible),
         "n_infrastructure_invalid": len(infra_rows),
@@ -1274,6 +1629,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="do not fail when every rollout scores the same (smoke runs only)",
     )
     parser.add_argument("--dry-run", action="store_true", help="check the server and the task list, collect nothing")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "keep rollouts this run_id already persisted instead of re-sampling them; each "
+            "kept row's recorded seed is re-derived and must match, so a resumed batch is "
+            "still one derivation rather than two stitched together"
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="print the summary as JSON")
     parser.add_argument(
         "--diagnostic-only",
@@ -1377,6 +1741,7 @@ def main(argv: list[str] | None = None) -> int:
             rollouts_override=args.rollouts,
             allow_uniform=args.allow_uniform,
             task_ids_override=task_ids,
+            resume=args.resume,
         )
     except CollectorError as e:
         print(f"ERROR: {e}", file=sys.stderr)

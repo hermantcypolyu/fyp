@@ -1,0 +1,82 @@
+# Phase 6H - per-rollout seed derivation smoke. PREPARED, NOT EXECUTED.
+#
+# ############################################################################
+# ##  STATUS: DIAGNOSTIC ONLY. Not a baseline. Not training evidence.       ##
+# ############################################################################
+#
+# Phase 6G cannot establish the model's reward distribution: all four attempts reused the
+# same deterministic seed and produced duplicate trajectories. `seed=42` was sent on every
+# completion call, so the four rollouts `rollouts_per_task: 4` promised were one sample
+# recorded four times - identical trajectories, identical candidate patches, one distinct
+# reward. That proves a sampling-independence defect in the harness, not a property of the
+# model. The model may still produce uniform -1.0 rewards once independent seeds are
+# applied.
+#
+# Phase 6H derives one sampling seed per (task_id, rollout_index) from the base seed and
+# records the derivation in every artifact - see `analysis/sampling_seeds.py`. This overlay
+# is the smoke that will show the fix at runtime. It is NOT run as part of Phase 6H: Phase
+# 6H is CPU-only, and running this needs a GPU and a separate, explicitly authorised step.
+#
+# Every setting a result could be attributed to is inherited unchanged from
+# `configs/eval/baseline_phase6.yaml`: model, revision, dtype, max_seq_length, prompt text,
+# tool versions, episode budgets, reward wiring, context budget, verifier, temperature and
+# top_p.
+#
+# Differences from Phase 6G, and why each is not a behavioural change:
+#
+#   * `output.*` - a new run directory. No existing directory is overwritten. Every one of
+#     these keys is set deliberately: `materialise_eval_config.py` merges exactly one level,
+#     so anything omitted here falls back to the base config and would point this smoke at
+#     the `phase6_baseline_1p5b` evidence directory.
+#   * `sampling.seed_policy: per_rollout` - inherited from the base config's new key,
+#     restated here so the value this smoke depends on is visible in the overlay that will
+#     be materialised and hashed into the manifest.
+#   * `sampling.seed_derivation: sha256_u32_v1` - likewise restated.
+#
+# `sampling.seed` stays 42. It is not the seed the requests carry any more; it is the base
+# seed the four per-rollout seeds are derived from:
+#
+#     r00 -> 184288048   r01 -> 3168762815   r02 -> 475852200   r03 -> 1693580453
+#
+# which are `plan_seeds(42, ["bugfix_offbyone_pagination"], 4)` and are pinned by
+# analysis/tests/test_phase6h_seed_derivation.py. If they change, the prepared smoke is no
+# longer the smoke the tests describe, and the test fails before a GPU is booked.
+#
+# What this smoke will NOT establish: four distinct seeds make the rollouts independent
+# samples, not a good model. It settles one ambiguity and leaves the other open. If all four
+# still score -1.0 with independent seeds, that is the first reward distribution this
+# project can legitimately describe - but it is four samples, not a converged estimate. If
+# the four now differ, Phase 6G's uniform -1.0 is confirmed as an artifact of the shared
+# seed. Neither outcome is a claim about the model beyond these four samples.
+
+extends: configs/eval/baseline_phase6.yaml
+
+output:
+  run_id: phase6h_bugfix_offbyone_pagination_20261106T153705Z
+  rollouts: results/raw/phase6h_bugfix_offbyone_pagination_20261106T153705Z/rollouts.jsonl
+  failures: results/raw/phase6h_bugfix_offbyone_pagination_20261106T153705Z/rollouts_failures.jsonl
+  private: results/raw/phase6h_bugfix_offbyone_pagination_20261106T153705Z/rollouts_private.jsonl
+  analysis: results/analysis/phase6h_bugfix_offbyone_pagination_20261106T153705Z.json
+
+sampling:
+  # Restated from the base config so the overlay records the values this run's independence
+  # depends on. Temperature and top_p are untouched: 1.0 / 1.0, as in Phase 6E and 6G.
+  seed: 42
+  seed_policy: per_rollout
+  seed_derivation: sha256_u32_v1
+
+run:
+  # The same single approved training-split task as Phase 6E and 6G. Not a held-out task.
+  task_subset:
+    - bugfix_offbyone_pagination
+  rollouts_per_task: 4
+  min_valid_rollouts: 4
+  # Non-training evidence, and a structural veto: this run can never be accepted as a
+  # baseline however well it scores.
+  diagnostic_only: true
+  # Armed, as in Phase 6G. With four genuinely independent seeds the guard is meaningful
+  # again: if four independent samples still produce one reward value, that is a real
+  # observation about the model. If the four now differ, the fix is visible in the only
+  # place that matters - the summary's distinct_rewards.
+  require_reward_variance: true
+  min_distinct_rewards: 2

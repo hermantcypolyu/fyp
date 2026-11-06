@@ -125,6 +125,19 @@ sampling:
                           # across arms by analysis/tests/test_protocol_parity.py
   top_p: 1.0              # GROUNDED: same; resolved 2026-11-04 in both arms
   seed: 42                # GROUNDED: both arms
+  # How `seed` reaches individual requests. Phase 6G sent `seed` verbatim on every call, so
+  # all four rollouts of a task were one sample recorded four times - a harness defect that
+  # looked like a model that collapsed. These two keys make the mapping explicit and
+  # checkable, so the same misinterpretation cannot recur silently.
+  #
+  # CHOSEN per_rollout: derive one seed per (task_id, rollout_index) and send it on every
+  # turn of that rollout. `per_turn` re-derives per turn; `literal` restores the 6G
+  # behaviour and is refused for any plan with more than one rollout.
+  seed_policy: per_rollout  # CHOSEN: see analysis/sampling_seeds.py
+  # The derivation is versioned because the same inputs mapping to a different seed would
+  # reinterpret already-collected rows. A config naming an algorithm this code does not
+  # implement is refused before the first model call.
+  seed_derivation: sha256_u32_v1  # GROUNDED: analysis/sampling_seeds.SAMPLING_SEED_DERIVATION
   max_tokens_per_turn: 1024  # CHOSEN: a 1.5B repair turn is a tool call plus a short
                           # rationale; 1024 keeps a runaway generation from eating a turn
                           # budget. Truncation at this cap is recorded, not hidden.

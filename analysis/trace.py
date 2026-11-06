@@ -275,6 +275,11 @@ def build_row(
     model: str | None = None,
     checkpoint_id: str | None = None,
     random_seed: int | None = None,
+    base_seed: int | None = None,
+    sampling_seed: int | None = None,
+    sampling_seed_derivation: str | None = None,
+    rollout_index: int | None = None,
+    seed_policy: str | None = None,
     prompt_config_version: str | None = None,
     candidate_patch: str | None = None,
     token_usage: dict[str, int] | None = None,
@@ -293,6 +298,18 @@ def build_row(
     Seed or a checkpoint that a caller did not supply is recorded as unknown, because a
     fabricated reproducibility field is worse than an absent one: it makes an unreproducible
     run look reproducible.
+
+    The seed fields form a chain and each says something the others cannot:
+
+    * `random_seed` - the seed the model requests actually carried (the *effective* seed).
+    * `base_seed` - the config's `sampling.seed`, the label the batch is indexed under.
+    * `sampling_seed_derivation` - the algorithm that maps the last two onto `random_seed`.
+    * `rollout_index` - this rollout's position in the task's group, the third input.
+    * `seed_policy` - `per_rollout`, `per_turn` or `literal`.
+
+    Recording only `random_seed` would be enough to replay one rollout but not to rebuild
+    the batch; recording only `base_seed` would be enough to name the batch but not to
+    replay one row. Both are written so either question is answerable from the row alone.
     """
     started, finished, duration = timer.stop()
     constraints = task.data.get("constraints", {}) or {}
@@ -372,6 +389,11 @@ def build_row(
             "model": model,
             "checkpoint_id": checkpoint_id,
             "random_seed": random_seed,
+            "base_seed": base_seed,
+            "sampling_seed": sampling_seed if sampling_seed is not None else random_seed,
+            "sampling_seed_derivation": sampling_seed_derivation,
+            "rollout_index": rollout_index,
+            "seed_policy": seed_policy,
             "prompt_config_version": prompt_config_version,
             "transport": transport,
         },

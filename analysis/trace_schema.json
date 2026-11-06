@@ -106,7 +106,7 @@
     "schema_version": {
       "type": "string",
       "const": "3",
-      "description": "Bumped on any breaking change, so an old results/ directory stays readable. v2: ADR 0006 widened reward to [-1,1] and added result.floor_tests. v3: adds termination_reason, turns, token_usage, steps[], candidate_patch, reward_components, hidden_tests, error, and agent.checkpoint_id/random_seed/prompt_config_version; the flat tool_calls[] transcript is replaced by the step-structured steps[]. See docs/trajectory_schema_audit.md."
+      "description": "Bumped on any breaking change, so an old results/ directory stays readable. v2: ADR 0006 widened reward to [-1,1] and added result.floor_tests. v3: adds termination_reason, turns, token_usage, steps[], candidate_patch, reward_components, hidden_tests, error, and agent.checkpoint_id/random_seed/prompt_config_version; the flat tool_calls[] transcript is replaced by the step-structured steps[]. v3 additive (Phase 6H): agent gains optional base_seed, sampling_seed, sampling_seed_derivation, rollout_index and seed_policy - optional, and not a v4 bump, because Phase 6E/6G rows remain valid without them and re-versioning would strand a results/ directory that must stay readable. See docs/trajectory_schema_audit.md."
     },
     "run_id": { "type": "string", "minLength": 1 },
     "rollout_id": {
@@ -164,7 +164,32 @@
         "random_seed": {
           "type": ["integer", "null"],
           "minimum": 0,
-          "description": "The sampling seed. Null only for scripted_gold, which is deterministic. A rollout that cannot be re-sampled from its own row is not reproducible."
+          "description": "The sampling seed actually sent on this rollout's model requests - the effective seed, not the configured base seed. Null only for scripted_gold, which is deterministic. A rollout that cannot be re-sampled from its own row is not reproducible."
+        },
+        "base_seed": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "v3 additive (Phase 6H). The config's sampling.seed - the label the batch is indexed under, before per-rollout derivation. Recorded alongside random_seed because a batch is reproduced by re-deriving from its base seed, while a single row is reproduced by its effective seed; one number cannot answer both questions. Null for rows written before Phase 6H and for scripted_gold."
+        },
+        "sampling_seed": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 4294967295,
+          "description": "v3 additive (Phase 6H). Duplicate of random_seed under its own name. random_seed predates per-rollout derivation and reads as 'the configured seed' to anyone who saw only Phase 6E-6G artifacts; this field is unambiguous about being the per-rollout value, and the pair must agree when both are present."
+        },
+        "sampling_seed_derivation": {
+          "type": ["string", "null"],
+          "description": "v3 additive (Phase 6H). The algorithm mapping (base_seed, task_id, rollout_index) onto sampling_seed, e.g. 'sha256_u32_v1'. Without this label the recorded seeds are numbers of unknown provenance, and a later change to the derivation would silently reinterpret old rows as reproducible when they are not. Null for rows written before Phase 6H and for scripted_gold."
+        },
+        "rollout_index": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "v3 additive (Phase 6H). This rollout's zero-based position within its task's group - the third input to the derivation. Recorded so the seed can be re-derived from the row without parsing rollout_id."
+        },
+        "seed_policy": {
+          "type": ["string", "null"],
+          "enum": ["per_rollout", "per_turn", "literal", null],
+          "description": "v3 additive (Phase 6H). How sampling.seed was applied. 'per_rollout' (derived once, repeated each turn) is the Phase 6H default; 'per_turn' re-derives per turn from the rollout seed; 'literal' sends the config seed verbatim and cannot yield independent rollouts, which is the Phase 6G defect. Null for rows written before Phase 6H."
         },
         "prompt_config_version": {
           "type": ["string", "null"],
