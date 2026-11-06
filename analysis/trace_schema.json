@@ -75,14 +75,27 @@
     "context_budget": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Optional (Phase 6B) per-rollout context telemetry. Token COUNTS only - never prompt text, so a row stays safe to share. Written even on successful rollouts, because the interesting baseline number is how close the policy came to the wall, not just whether it hit it.",
+      "description": "Optional (Phase 6B) per-rollout context telemetry. Token COUNTS only - never prompt text, so a row stays safe to share. Written even on successful rollouts, because the interesting baseline number is how close the policy came to the wall, not just whether it hit it. Phase 6F adds `status` and `context_remaining_tokens` so the reader does not have to re-derive the verdict, and starts actually populating the field: until Phase 6F the collector wrote this telemetry only to the private sidecar, so the run summary's copy of it was always null.",
       "required": ["max_model_len", "reserved_completion_tokens", "safety_margin_tokens", "capacity"],
       "properties": {
         "max_model_len": { "type": "integer", "minimum": 1 },
         "reserved_completion_tokens": { "type": "integer", "minimum": 0 },
         "safety_margin_tokens": { "type": "integer", "minimum": 0 },
         "capacity": { "type": "integer", "minimum": 0 },
-        "peak_prompt_tokens": { "type": "integer", "minimum": 0 },
+        "peak_prompt_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tokens in the largest prompt this rollout sent, as measured before the request left the process. 0 when the rollout failed before its first measurement."
+        },
+        "context_remaining_tokens": {
+          "type": ["integer", "null"],
+          "description": "capacity minus peak_prompt_tokens. null when the prompt could not be measured."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ok", "context_budget_exceeded", "tokenizer_unavailable"],
+          "description": "The preflight verdict for the largest prompt in this rollout."
+        },
         "compaction_events": {
           "type": "integer",
           "minimum": 0,

@@ -36,6 +36,7 @@ Exit codes: 0 written / already-present-and-matching, 1 refused overwrite, 2 bad
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -391,6 +392,80 @@ def unresolved_fields(manifest: dict[str, Any]) -> list[str]:
 # --------------------------------------------------------------------------- manifest
 
 
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    """Merge `overlay` onto `base`, returning the merged document and per-key provenance.
+
+    Provenance is recorded as a dotted path -> source name for every key the overlay
+    supplied. It exists because a manifest that lists `rollouts_per_task: 8` is making a
+    claim about the run, and the reader has to be able to tell whether 8 came from the
+    formal protocol, the pilot overlay, or a command-line override. Without it, an overlay
+    default silently impersonates a protocol value.
+    """
+    merged = copy.deepcopy(base)
+    provenance: dict[str, str] = {}
+
+    def _walk(node: Any, prefix: str) -> None:
+        for key, value in node.items():
+            dotted = f"{prefix}{key}"
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                _walk(value, f"{dotted}.")
+            else:
+                merged[key] = copy.deepcopy(value)
+                provenance[dotted] = "overlay"
+
+    _walk(overlay, "")
+    return merged, provenance
+
+
+def effective_settings(
+    protocol: dict[str, Any],
+    pilot: dict[str, Any],
+    *,
+    arm: str,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The settings the run actually used, with hashes and provenance.
+
+    The base protocol is always hashed. The overlay hash is unconditional for the same
+    reason `pilot.file` is: it answers "which file existed and what was in it", independent
+    of whether this arm applied it. The merged hash is over the merged document *after*
+    overrides, so it fingerprints the run rather than the intent.
+    """
+    merged, provenance = _deep_merge(protocol, pilot)
+
+    for name, value in (overrides or {}).items():
+        merged[name] = value
+        provenance[name] = "cli override"
+
+    rollouts = merged.get("rollouts") or {}
+
+    for key in ("rollouts_per_task", "tasks"):
+        if f"rollouts.{key}" in provenance:
+            provenance[f"rollouts.{key}"] = (
+                f"overlay ({PILOT_CONFIG})" if arm in NON_UPDATING_ARMS else "overlay (not applied to this arm)"
+            )
+
+    # Canonical JSON, sorted, so the hash depends on the settings and not on YAML ordering.
+    # `default=str` covers values YAML parsed into non-JSON scalars (dates in the protocol
+    # header), which are still settings that must be part of the fingerprint.
+    encoded = json.dumps(merged, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+
+    return {
+        # -- what this arm actually resolved to ---------------------------------
+        "rollouts_per_task": rollouts.get("rollouts_per_task"),
+        "tasks": rollouts.get("tasks"),
+        "concurrency": (merged.get("hardware") or {}).get("concurrency"),
+        # -- hashes over the three documents ------------------------------------
+        "hashes": {
+            "protocol": config_hash(PROTOCOL_CONFIG),
+            "overlay": config_hash(PILOT_CONFIG),
+            "merged": {"sha256": hashlib.sha256(encoded).hexdigest(), "bytes": len(encoded)},
+        },
+        # -- where each value came from -----------------------------------------
+        "provenance": dict(sorted(provenance.items())),
+    }
+
+
 def build_manifest(
     *,
     arm: str,
@@ -435,6 +510,14 @@ def build_manifest(
         },
         # -- per-arm override, hashed ------------------------------------------------
         "arm_config": config_hash(arm_config),
+        # -- the resolved settings, as opposed to the files that were read ----------
+        #    `protocol` and `pilot` above say what each file contained. This block says
+        #    what the run actually used after the overlay was merged, and which layer
+        #    supplied each value. Phase 6E showed why this is not redundant: its manifest
+        #    reported `rollouts_per_task: 8` and `tasks: null` from the overlay defaults
+        #    while the run executed 4 rollouts over 1 task, and nothing in the file could
+        #    distinguish "the overlay said 8" from "the run used 8".
+        "effective": effective_settings(protocol, pilot, arm=arm),
         # -- the rollout-only overlay, recorded so a pilot run names the file that
         #    defined it rather than only the formal protocol it did not execute.
         #    The file hash is unconditional: it answers "did the overlay exist and has

@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
+import stat
 import sys
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
@@ -37,6 +39,7 @@ from rewards.compose import REWARD_MIN
 
 __all__ = [
     "MAX_PATCH_CHARS",
+    "PRIVATE_MODE",
     "SCHEMA_PATH",
     "SCHEMA_V2_PATH",
     "SCHEMA_VERSION",
@@ -46,6 +49,7 @@ __all__ = [
     "collect_patch",
     "read_jsonl",
     "read_private_jsonl",
+    "secure_write_private_log",
     "validate_row",
     "write_jsonl",
     "write_private_jsonl",
@@ -512,3 +516,55 @@ def write_private_jsonl(
 def read_private_jsonl(path: Path) -> dict[tuple[str, str], dict[str, Any]]:
     """Load the private sidecar as `(run_id, rollout_id) -> record`."""
     return {(row["run_id"], row["rollout_id"]): row for row in read_jsonl(path)}
+
+
+#: Owner read/write only. The private log holds raw tool arguments and observations, which
+#: can contain the contents of the task's repository - including a gold patch the agent
+#: happened to read. Nothing but its owner may open it.
+PRIVATE_MODE = 0o600
+
+
+def secure_write_private_log(path: Path, records: Iterable[dict[str, Any]], *, append: bool = False) -> Path:
+    """Write the private rollout log with owner-only permissions, verified after opening.
+
+    `write_private_jsonl` above is for the verifier's per-test sidecar. This is for the
+    collector's private log, whose record shape is the collector's own and which must not be
+    reshaped: Phase 6E artifacts are already on disk in that format, and rewriting them to a
+    new shape would destroy the evidence they exist to preserve.
+
+    **Why not just `open(..., "w")`.** That is what Phase 6E did, and the file landed at
+    0664 because the mode came from the process umask. A privacy requirement that is
+    satisfied only when someone happens to have a restrictive umask is not a requirement.
+    Two things are therefore done explicitly:
+
+    1. `os.open` with `mode=0o600` so the file is *created* unreadable to group/other - there
+       is no window in which the content exists with wider permissions.
+    2. `os.fchmod` on the open descriptor, which also narrows an existing file whose mode
+       drifted. This is what makes a resume safe: appending must not inherit a broad mode
+       from a file written before this fix.
+
+    The mode is read back off the descriptor and asserted, because the umask can still
+    remove bits, and a silent fallback to 0644 is exactly the bug being fixed.
+    """
+
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
+    fd = os.open(path, flags, PRIVATE_MODE)
+    try:
+        # Narrow explicitly: O_CREAT's mode is masked by the umask and does not apply to a
+        # file that already existed.
+        os.fchmod(fd, PRIVATE_MODE)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n", closefd=False) as fh:
+            for record in records:
+                fh.write(json.dumps(record, sort_keys=True) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        actual = stat.S_IMODE(os.fstat(fd).st_mode)
+    finally:
+        os.close(fd)
+
+    if actual != PRIVATE_MODE:
+        raise TraceError(
+            f"private log {path} has mode {actual:04o}, expected {PRIVATE_MODE:04o}; "
+            "refusing to leave a readable private log on disk"
+        )
+    return path

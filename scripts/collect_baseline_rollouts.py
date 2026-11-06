@@ -51,12 +51,15 @@ script that quietly overrides the environment makes the rule unenforceable.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
+import os
 import signal
+import stat
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -81,7 +84,14 @@ from analysis.context_budget import (  # noqa: E402
     preflight,
     reward_eligible_rows,
 )
-from analysis.trace import SCHEMA_VERSION, Timer, build_row, collect_patch, write_jsonl  # noqa: E402
+from analysis.trace import (  # noqa: E402
+    SCHEMA_VERSION,
+    Timer,
+    build_row,
+    collect_patch,
+    secure_write_private_log,
+    write_jsonl,
+)
 from envs.coding_env.session import EpisodeSession, find_task  # noqa: E402
 from envs.coding_env.tools import TOOL_DEFINITIONS  # noqa: E402
 
@@ -299,6 +309,36 @@ def _flatten_keys(node: Any, prefix: str = "") -> set[str]:
     return keys
 
 
+#: Where each CLI override lives in the config document. The override is applied to the
+#: raw mapping rather than to an attribute, because every setting on `BaselineConfig` is a
+#: read-only view over `raw` - there is nothing to assign to.
+_OVERRIDE_PATHS: dict[str, tuple[str, ...]] = {
+    "diagnostic_only": ("run", "diagnostic_only"),
+    "tokenizer_path": ("context", "tokenizer_path"),
+}
+
+
+def _with_overrides(cfg: BaselineConfig, **overrides: Any) -> BaselineConfig:
+    """A new frozen config with CLI overrides applied, leaving the original untouched.
+
+    `dataclasses.replace` on this dataclass only replaces `raw`, so an override is written
+    into a deep copy of the raw document and a fresh instance is built around it. The input
+    is never mutated: a caller that holds the config it loaded must not find it changed
+    underneath it, and the frozen dataclass is what enforces that.
+    """
+    raw = copy.deepcopy(cfg.raw)
+    for name, value in overrides.items():
+        try:
+            *parents, leaf = _OVERRIDE_PATHS[name]
+        except KeyError as exc:
+            raise CollectorError(f"no config path is registered for override {name!r}") from exc
+        node = raw
+        for part in parents:
+            node = node.setdefault(part, {})
+        node[leaf] = value
+    return replace(cfg, raw=raw)
+
+
 # ------------------------------------------------------------------ model client
 
 
@@ -477,7 +517,9 @@ class RolloutOutcome:
     #: Set when the attempt never became a reward-eligible episode. The record is stored
     #: alongside the row so the batch can count it without re-parsing messages.
     infrastructure_failure: dict[str, Any] | None = None
-    #: Context-budget telemetry for the first request of this rollout.
+    #: Context-budget telemetry for the first request of this rollout, in the public
+    #: (schema-declared, counts-only) shape. The same record is written to the private
+    #: sidecar, so the two files describe one measurement rather than two.
     context_budget: dict[str, Any] | None = None
     compaction_events: int = 0
 
@@ -803,13 +845,27 @@ def run_one_rollout(
         # timeout or a turn cap. The loop can, so the loop wins for those two.
         row["termination_reason"] = stopped_on
 
+    # ---- context-budget telemetry, made public -------------------------------------
+    # Phase 6E wrote this only into the private sidecar, but the run summary read
+    # `row["context_budget"]` from the public row, so `summary.context_budget` was always
+    # null - the telemetry existed and was silently unreachable at the level it was
+    # reported. It now lives on the public row too.
+    #
+    # It is safe to publish because it is counts only: which fields appear is fixed by
+    # `Probe.to_dict`, and no prompt text, tool argument or observation can enter through
+    # it. The private sidecar keeps the same record for continuity with Phase 6E.
+    row["context_budget"] = _public_context_telemetry(first_probe, compaction_events)
+
     return RolloutOutcome(
         row=row,
         tool_calls=private_tool_log,
         stopped_on=row["termination_reason"],
         transcript_chars=len(json.dumps(messages)),
         infrastructure_failure=infra,
-        context_budget=first_probe.to_dict() if first_probe is not None else None,
+        # Deliberately the same record as the public row: one measurement, written twice for
+        # two audiences. `Probe.to_dict()` is not used here because its key set is not what
+        # the schema accepts, and the private sidecar must stay joinable to the public row.
+        context_budget=row["context_budget"],
         compaction_events=compaction_events,
     )
 
@@ -932,7 +988,13 @@ def collect(
         "wall_clock_s": round(time.monotonic() - started, 3),
         "distinct_rewards": distinct,
         "all_termination_reasons": sorted({r["termination_reason"] for r in rows}),
-        "context_budget": None if not rows else _first_context_budget(rows),
+        "context_budget": _first_context_budget(rows),
+        # Lifecycle stages, filled in after persistence below. Declared here so every
+        # summary carries the same keys whether or not anything went wrong.
+        "collection_completed": False,
+        "evidence_persisted": None,
+        "baseline_acceptance": None,
+        "training_suitability": None,
     }
     summary["baseline_valid"], summary["validity_problems"] = _assess_validity(
         cfg=cfg,
@@ -940,33 +1002,55 @@ def collect(
         eligible=eligible,
         rewards=rewards,
     )
+
+    # ---- persist, then judge -------------------------------------------------------
+    # Phase 6E proved why the order matters. The uniform-reward guard raised before
+    # anything was written, so a completed batch of four rollouts - roughly 80 seconds of
+    # GPU time - left no evidence at all, and the only surviving record was the guard's own
+    # error message. The batch that most needs inspecting is exactly the one a guard rejects,
+    # so the guard must never be the thing that destroys it.
+    #
+    # The four stages are now distinct and each is recorded in the summary:
+    #   collection_completed  - the loop finished over every configured rollout
+    #   evidence_persisted    - every public/private row reached disk and was fsynced
+    #   baseline_acceptance   - the run-level guards' verdict
+    #   training_suitability  - always false here; stated, not inferred
+    persisted = _persist_evidence(cfg, rows, private, summary)
+    summary["collection_completed"] = True
+    summary["evidence_persisted"] = persisted
+    summary["baseline_acceptance"] = {
+        "passed": summary["baseline_valid"],
+        "problems": list(summary["validity_problems"]),
+    }
+    # A diagnostic-only run is not training evidence by construction, and neither is a run
+    # whose guards failed. Both are stated rather than left for a reader to derive.
+    summary["training_suitability"] = {
+        "training_ready": False,
+        "optimizer_allowed": False,
+        "reason": (
+            "diagnostic_only run: collected for diagnosis, never for training"
+            if cfg.diagnostic_only
+            else "run-level acceptance guards failed"
+            if not summary["baseline_valid"]
+            else "collection alone does not establish training suitability"
+        ),
+    }
+    summary["rollouts_path"] = str(cfg.output_path("rollouts"))
+    summary_path = cfg.output_path("rollouts").parent / "collection_summary.json"
+    _write_json_atomic(summary_path, summary)
+    log.info("wrote %d rows to %s", len(rows), cfg.output_path("rollouts"))
+
+    # Only now, with the evidence durable, is it legitimate to refuse the batch.
     if cfg.require_reward_variance and not allow_uniform:
         if len(distinct) < cfg.min_distinct_rewards:
             raise UniformRewardError(
                 f"all {len(eligible)} reward-eligible rollouts scored from {distinct} "
                 f"distinct reward value(s); 6.2 requires >= {cfg.min_distinct_rewards}. A "
                 "constant reward gives GRPO no gradient, so this is a harness result, not a "
-                "baseline:\n"
-                f"  {json.dumps(summary, indent=2)}\n"
+                f"baseline. The {len(rows)} completed rollout(s) are preserved at "
+                f"{summary_path.parent} - inspect them before re-running.\n"
                 "Investigate before proceeding. `--allow-uniform` overrides for a smoke."
             )
-
-    write_jsonl(rows, cfg.output_path("rollouts"))
-    write_jsonl(
-        [r for r in rows if r["termination_reason"] in {"error", "infrastructure_error"}],
-        cfg.output_path("failures"),
-    )
-    # The private log holds tool arguments and raw outputs, which are not trace-row shaped
-    # (and must never be validated as such). It is written directly, not via write_jsonl.
-    private_path = cfg.output_path("private")
-    private_path.parent.mkdir(parents=True, exist_ok=True)
-    with private_path.open("w", encoding="utf-8") as handle:
-        for entry in private:
-            handle.write(json.dumps(entry, sort_keys=True) + "\n")
-    summary["rollouts_path"] = str(cfg.output_path("rollouts"))
-    summary_path = cfg.output_path("rollouts").parent / "collection_summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-    log.info("wrote %d rows to %s", len(rows), cfg.output_path("rollouts"))
 
     # Run-level guards are evaluated after the artifacts exist, so an invalid batch is
     # still on disk to inspect - but it is loudly labelled and the caller gets a
@@ -984,10 +1068,124 @@ def collect(
     return summary
 
 
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> Path:
+    """Write JSON via a temporary file and `os.replace`, so a reader never sees a half file.
+
+    `collection_summary.json` is rewritten as the run progresses and is the file a human
+    opens first when a batch is rejected. A truncated summary would be read as an empty
+    run, which is a worse failure than the one it was meant to report.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+    return path
+
+
+def _persist_evidence(
+    cfg: BaselineConfig,
+    rows: list[dict[str, Any]],
+    private: list[dict[str, Any]],
+    summary: dict[str, Any],
+) -> dict[str, Any]:
+    """Write every completed row to disk and flush it before any guard is consulted.
+
+    Returns a small report of what reached disk, which the summary carries so "collection
+    completed" and "evidence persisted" stay separately checkable.
+
+    The public rows go through `write_jsonl`, which validates each row against the schema
+    as it is appended: a malformed row is a bug found now rather than during analysis. The
+    private log is written by `secure_write_private_log`, which creates it 0600 - the
+    Phase 6E artifact landed at 0664 because it came from a plain `open()`.
+    """
+    rollouts_path = cfg.output_path("rollouts")
+    private_path = cfg.output_path("private")
+
+    write_jsonl(rows, rollouts_path)
+    write_jsonl(
+        [r for r in rows if r["termination_reason"] in {"error", "infrastructure_error"}],
+        cfg.output_path("failures"),
+    )
+    # The private log holds tool arguments and raw outputs, which are not trace-row shaped
+    # (and must never be validated as such).
+    secure_write_private_log(private_path, private)
+
+    for path in (rollouts_path, private_path):
+        with path.open("rb") as handle:
+            os.fsync(handle.fileno())
+
+    public_lines = sum(1 for _ in rollouts_path.open(encoding="utf-8"))
+    private_lines = sum(1 for _ in private_path.open(encoding="utf-8"))
+    mode = stat.S_IMODE(private_path.stat().st_mode)
+    report = {
+        "persisted": True,
+        "rollouts_path": str(rollouts_path),
+        "n_public_rows": public_lines,
+        "private_path": str(private_path),
+        "n_private_rows": private_lines,
+        "private_mode": f"{mode:04o}",
+        "run_dir": str(rollouts_path.parent),
+    }
+    if public_lines != len(rows):
+        raise CollectorError(
+            f"{rollouts_path} holds {public_lines} row(s) but {len(rows)} were collected; "
+            "refusing to report a batch whose evidence is incomplete"
+        )
+    if private_lines != len(private):
+        raise CollectorError(
+            f"{private_path} holds {private_lines} row(s) but {len(private)} were collected; "
+            "refusing to report a batch whose private evidence is incomplete"
+        )
+    return report
+
+
+def _public_context_telemetry(probe: Probe | None, compaction_events: int) -> dict[str, Any] | None:
+    """The public, privacy-safe context-budget record for one rollout.
+
+    Counts only, and the key set is exactly what `analysis/trace_schema.json` declares for
+    `context_budget` (which is `additionalProperties: false`, so this is not advisory).
+
+    Two shape notes, both deliberate:
+
+    * The schema's vocabulary is `capacity` / `peak_prompt_tokens`; `Probe.to_dict()` uses
+      `max_model_len`-derived arithmetic and calls the same quantity `prompt_tokens`. The
+      schema is the contract for a persisted row, so the schema's names win and the probe's
+      values are mapped onto them. Emitting `Probe.to_dict()` verbatim would fail
+      validation on an undeclared key, which is how this defect stayed hidden: nothing
+      wrote the field, so nothing was ever rejected.
+    * `status` is added to the schema rather than dropped, because "did this rollout come
+      near the wall" is the whole point of the record, and `ok` versus `context_budget_exceeded`
+      is that answer.
+
+    Returns None when no probe ran (the rollout died before its first measurement). Null is
+    the honest value: a zeroed record would claim a measurement of zero.
+    """
+    if probe is None:
+        return None
+    return {
+        "max_model_len": probe.budget.max_model_len,
+        "reserved_completion_tokens": probe.budget.reserved_completion_tokens,
+        "safety_margin_tokens": probe.budget.safety_margin_tokens,
+        "capacity": probe.budget.capacity,
+        "peak_prompt_tokens": probe.prompt_tokens if probe.prompt_tokens is not None else 0,
+        "compaction_events": compaction_events,
+        "status": probe.status,
+        "context_remaining_tokens": probe.remaining,
+    }
+
+
 def _first_context_budget(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The first row's context-budget telemetry, for the run summary.
 
     Counts only, so this is safe to print and to commit alongside the summary.
+
+    A row that predates the public telemetry field simply has none; it is skipped rather
+    than treated as an error, so historical batches stay summarisable.
     """
     for row in rows:
         budget = row.get("context_budget")
@@ -1039,6 +1237,14 @@ def _assess_validity(
         )
 
     # A run can never be both diagnostic-only and training-valid.
+    #
+    # This is the structural guarantee behind `diagnostic_only`: it is not a label applied
+    # to the output, it is a veto on the verdict. A diagnostic run cannot pass acceptance
+    # even if the batch happens to satisfy every numeric guard, so no later code path can
+    # promote one to a baseline by accident.
+    if cfg.diagnostic_only:
+        problems.append("diagnostic_only run: collected for diagnosis, never training evidence")
+
     return (not problems), problems
 
 
@@ -1096,10 +1302,19 @@ def main(argv: list[str] | None = None) -> int:
     cfg = BaselineConfig.load(args.config)
 
     # CLI overrides exist for diagnosis on unusual hardware, not to change the protocol.
+    #
+    # These used to be assignments (`cfg.diagnostic_only = True`), which crashed with
+    # FrozenInstanceError: the config is frozen on purpose, so that the record of what a run
+    # used cannot be edited after it started. `dataclasses.replace` keeps that property - the
+    # frozen instance is never mutated, a new one is built - and keeps the type honest, so
+    # the dataclass does not need to be made mutable to support a command-line flag.
+    overrides: dict[str, Any] = {}
     if args.diagnostic_only:
-        cfg.diagnostic_only = True
+        overrides["diagnostic_only"] = True
     if args.tokenizer is not None:
-        cfg.tokenizer_path = args.tokenizer
+        overrides["tokenizer_path"] = args.tokenizer
+    if overrides:
+        cfg = _with_overrides(cfg, **overrides)
     if cfg.diagnostic_only:
         log.warning("diagnostic_only mode: this run's artifacts must never be used as a baseline or as training data")
 
