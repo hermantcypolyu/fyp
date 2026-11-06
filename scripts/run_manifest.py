@@ -404,16 +404,23 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> tuple[dict[str
     merged = copy.deepcopy(base)
     provenance: dict[str, str] = {}
 
-    def _walk(node: Any, prefix: str) -> None:
-        for key, value in node.items():
+    def _walk(source: dict[str, Any], target: dict[str, Any], prefix: str) -> None:
+        # `target` is threaded through explicitly rather than reaching for an enclosing
+        # `merged`: the first version of this wrote every nested key back onto the ROOT
+        # document, so `hardware.concurrency: 1` landed as a top-level `concurrency` and
+        # `hardware.concurrency` stayed absent. The merged hash still looked plausible,
+        # which is what made it dangerous - the whole point of the hash is to fingerprint
+        # the effective settings, and it was fingerprinting a document with 50-odd keys
+        # in the wrong place.
+        for key, value in source.items():
             dotted = f"{prefix}{key}"
-            if isinstance(value, dict) and isinstance(merged.get(key), dict):
-                _walk(value, f"{dotted}.")
+            if isinstance(value, dict) and isinstance(target.get(key), dict):
+                _walk(value, target[key], f"{dotted}.")
             else:
-                merged[key] = copy.deepcopy(value)
+                target[key] = copy.deepcopy(value)
                 provenance[dotted] = "overlay"
 
-    _walk(overlay, "")
+    _walk(overlay, merged, "")
     return merged, provenance
 
 
@@ -466,6 +473,116 @@ def effective_settings(
     }
 
 
+# Keys whose *absence* is still meaningful, but which may legitimately be omitted from a
+# materialised config. `model.adapter` is the only one: the checked-in baseline writes
+# `adapter: null` to say "base model", but a merge that simply never mentions it states the
+# same thing, and refusing to call that materialised would be pedantry that hides real gaps.
+OPTIONAL_IN_EXECUTED = frozenset({"model.adapter"})
+
+
+def executed_config(rel_path: str) -> dict[str, Any]:
+    """Fingerprint the config a diagnostic run actually executes, and read its settings.
+
+    Why this exists. `effective_settings` above describes the *training* pair
+    (`protocol_1p5b.yaml` + `pilot_rollouts_1p5b.yaml`), which is what a GRPO arm runs.
+    A Phase 6 diagnostic smoke runs something else entirely: `configs/eval/baseline_phase6.yaml`
+    materialised with a smoke overlay. Phase 6E hit exactly this and its manifest could say
+    `rollouts_per_task: 8` while the collector ran 4, because nothing in the manifest had
+    ever read the config the collector was handed. The numbers were individually true and
+    jointly misleading, which is the failure mode the `effective` block was added to end.
+
+    The collector loads ONE file with `BaselineConfig.load` and resolves no `extends:` at
+    all - an overlay carrying only its differences is not runnable, it must be materialised
+    first. So the value recorded here is the materialised file, hashed byte-for-byte, plus
+    the handful of settings a reader needs to know what the run was. A materialised file
+    that is missing any of them raises here rather than at run start.
+    """
+    import yaml
+
+    path = REPO_ROOT / rel_path
+    record: dict[str, Any] = {
+        "path": rel_path,
+        "sha256": None,
+        "present": path.is_file(),
+        "materialised": False,
+    }
+    if not path.is_file():
+        record["error"] = "file not found; the manifest cannot claim settings it never read"
+        return record
+
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    record["sha256"] = digest
+    record["bytes"] = path.stat().st_size
+
+    with path.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+
+    def _dig(dotted: str) -> Any:
+        node: Any = raw
+        for part in dotted.split("."):
+            if not isinstance(node, dict) or part not in node:
+                # A missing key here means the file is not the materialised config it is
+                # claimed to be. Record the gap explicitly instead of printing a null that
+                # reads like a deliberate choice.
+                raise KeyError(dotted)
+            node = node[part]
+        return node
+
+    wanted = {
+        "run_id": "output.run_id",
+        "tasks": "run.task_subset",
+        "rollouts_per_task": "run.rollouts_per_task",
+        "min_valid_rollouts": "run.min_valid_rollouts",
+        "min_distinct_rewards": "run.min_distinct_rewards",
+        "diagnostic_only": "run.diagnostic_only",
+        "model_name": "model.name",
+        "model_revision": "model.revision",
+        "adapter": "model.adapter",
+        "temperature": "sampling.temperature",
+        "top_p": "sampling.top_p",
+        "seed": "sampling.seed",
+        "max_tokens_per_turn": "sampling.max_tokens_per_turn",
+        "max_turns": "episode.max_turns",
+        "max_tool_calls": "episode.max_tool_calls",
+        "timeout_s_per_rollout": "episode.timeout_s_per_rollout",
+        "split": "tasks.split",
+        "heldout_enabled": "tasks.heldout_enabled",
+        "reward_live": "reward.live",
+        "reward_analysed": "reward.analysed",
+        "reward_v2_computed_inline": "reward.reward_v2_computed_inline",
+        "served_model_name": "server.served_model_name",
+        "cuda_visible_devices": "server.cuda_visible_devices",
+        "max_model_len": "context.max_model_len",
+        "reserved_completion_tokens": "context.reserved_completion_tokens",
+        "safety_margin_tokens": "context.safety_margin_tokens",
+    }
+    settings: dict[str, Any] = {}
+    missing: list[str] = []
+    for name, dotted in wanted.items():
+        try:
+            settings[name] = _dig(dotted)
+        except KeyError:
+            settings[name] = None
+            # `model.adapter: null` is a legitimate statement - "run the base model" - and
+            # the checked-in baseline says it explicitly. Its *absence* is not, so it stays
+            # in `wanted` for the value but is exempt from the materialisation check.
+            if dotted not in OPTIONAL_IN_EXECUTED:
+                missing.append(dotted)
+
+    # An overlay is not materialised, so it cannot drive a run. Say that plainly rather
+    # than emitting a settings block full of nulls that look like deliberate choices.
+    record["settings"] = settings
+    record["materialised"] = not missing
+    if missing:
+        record["missing"] = missing
+        record["error"] = (
+            "this file is not a materialised run config: it omits "
+            + ", ".join(missing)
+            + ". The collector resolves no `extends:`, so an overlay-only file cannot drive a run."
+        )
+    return record
+
+
 def build_manifest(
     *,
     arm: str,
@@ -475,6 +592,7 @@ def build_manifest(
     input_checkpoint: str | None,
     output_checkpoint: str | None,
     note: str | None,
+    eval_config: str | None = None,
 ) -> dict[str, Any]:
     if arm not in ARM_CONFIGS:
         raise ValueError(f"unknown arm {arm!r}; expected one of {sorted(ARM_CONFIGS)}")
@@ -518,6 +636,13 @@ def build_manifest(
         #    while the run executed 4 rollouts over 1 task, and nothing in the file could
         #    distinguish "the overlay said 8" from "the run used 8".
         "effective": effective_settings(protocol, pilot, arm=arm),
+        # -- the config this run actually executed ------------------------------------
+        #    Separate from `effective` on purpose. `effective` describes the training pair
+        #    that a GRPO arm would run; a diagnostic smoke runs a materialised eval config,
+        #    and Phase 6E's manifest reported 8 rollouts for a run that executed 4 because
+        #    nothing recorded the second file. Null when the caller did not name one, which
+        #    is honest: this manifest then makes no claim about what ran.
+        "executed": executed_config(eval_config) if eval_config else None,
         # -- the rollout-only overlay, recorded so a pilot run names the file that
         #    defined it rather than only the formal protocol it did not execute.
         #    The file hash is unconditional: it answers "did the overlay exist and has
@@ -665,6 +790,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input-checkpoint", default=None)
     parser.add_argument("--output-checkpoint", default=None)
     parser.add_argument("--note", default=None)
+    parser.add_argument(
+        "--eval-config",
+        default=None,
+        help=(
+            "Repo-relative path to the materialised eval config the run will actually execute "
+            "(e.g. results/raw/<run>/merged_config.yaml). Recorded, with its hash and settings, "
+            "in the `executed` block. Diagnostic smokes do not run the training pair, so without "
+            "this the manifest describes a different file from the one the collector loads."
+        ),
+    )
     parser.add_argument("-o", "--out", default=None, help="Run directory (default: results/raw/<run_id>/)")
     parser.add_argument("--force", action="store_true", help="Supersede an existing, differing manifest")
     parser.add_argument("--json", action="store_true", help="Print the manifest to stdout")
@@ -711,6 +846,7 @@ def main(argv: list[str] | None = None) -> int:
         input_checkpoint=args.input_checkpoint,
         output_checkpoint=args.output_checkpoint,
         note=args.note,
+        eval_config=args.eval_config,
     )
 
     try:

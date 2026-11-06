@@ -397,10 +397,34 @@ def _manifest(**kwargs: Any) -> dict[str, Any]:
     return build_manifest(**base)
 
 
-def test_manifest_effective_block_reports_the_protocol_value_not_the_overlay_default() -> None:
-    """Phase 6E's manifest said 8 rollouts while the protocol it named says 4."""
+def test_manifest_effective_block_reports_what_the_merged_document_says() -> None:
+    """`effective` must equal the merged overlay value, not the protocol's, and say so.
+
+    This test previously asserted `effective["rollouts_per_task"] == 4` with the reasoning
+    "Phase 6E's manifest said 8 while the protocol says 4". That reasoning was wrong twice
+    over. First, 4 was the *protocol* value and the pilot overlay deliberately raises it to
+    8, so the merge is supposed to yield 8. Second, the number only came out as 4 because
+    `_deep_merge` was writing nested overlay keys onto the root document, which left
+    `rollouts` holding the protocol's untouched copy. The assertion was passing on the bug.
+
+    The property that actually matters is the one stated in the test name: `effective` is
+    the merged value with its provenance, and it is never silently the protocol default.
+    """
+    from scripts.run_manifest import load_pilot, load_protocol
+
+    protocol, pilot = load_protocol(), load_pilot()
     effective = _manifest()["effective"]
-    assert effective["rollouts_per_task"] == 4
+
+    assert effective["rollouts_per_task"] == pilot["rollouts"]["rollouts_per_task"]
+    assert effective["rollouts_per_task"] != protocol["rollouts"]["rollouts_per_task"]
+    assert "pilot_rollouts_1p5b.yaml" in effective["provenance"]["rollouts.rollouts_per_task"]
+
+
+def test_manifest_tasks_stay_null_because_neither_file_names_a_task() -> None:
+    """A null `tasks` is a visible gap, not a default - and it must stay visible."""
+    manifest = _manifest()
+    assert manifest["effective"]["tasks"] is None
+    assert manifest["pilot"]["tasks"] is None
 
 
 def test_manifest_records_three_hashes_and_per_field_provenance() -> None:
@@ -418,12 +442,14 @@ def test_manifest_records_three_hashes_and_per_field_provenance() -> None:
 
 
 def test_manifest_still_names_the_overlay_so_its_defaults_cannot_masquerade() -> None:
-    """The overlay block keeps the file's own values; `effective` is the run's values."""
+    """The `pilot` block keeps the file's own values whatever the arm resolved to."""
     manifest = _manifest()
     assert manifest["pilot"]["rollouts_per_task"] == 8
     assert manifest["pilot"]["tasks"] is None
-    assert manifest["effective"]["rollouts_per_task"] == 4
-    assert manifest["effective"]["rollouts_per_task"] != manifest["pilot"]["rollouts_per_task"]
+    assert manifest["pilot"]["applies"] is True
+    # `effective` is the merged document, and the merge is not the identity.
+    assert manifest["effective"]["hashes"]["merged"]["sha256"]
+    assert manifest["effective"]["hashes"]["protocol"]["sha256"] != manifest["effective"]["hashes"]["merged"]["sha256"]
 
 
 def test_manifest_merged_hash_moves_when_the_run_settings_change() -> None:
@@ -435,6 +461,50 @@ def test_manifest_merged_hash_moves_when_the_run_settings_change() -> None:
     second = effective_settings(protocol, pilot, arm="pilot", overrides={"measured_tasks": 1})
     assert first["hashes"]["merged"]["sha256"] != second["hashes"]["merged"]["sha256"]
     assert first["hashes"]["protocol"] == second["hashes"]["protocol"]
+
+
+def test_nested_overlay_keys_land_inside_their_own_section() -> None:
+    """A nested overlay key must merge into its section, not onto the root document.
+
+    The first `_deep_merge` recursed into the overlay's nested dicts but wrote each leaf
+    onto the ROOT copy, so `hardware.concurrency: 1` became a top-level `concurrency` and
+    `hardware.concurrency` stayed absent. Scalars like `rollouts_per_task` were unaffected,
+    which is exactly why the other tests in this file passed: they only inspected the
+    values the bug happened to get right.
+    """
+    from scripts.run_manifest import _deep_merge, load_pilot, load_protocol
+
+    protocol, pilot = load_protocol(), load_pilot()
+    merged, provenance = _deep_merge(protocol, pilot)
+
+    # No overlay key may appear at the root unless the overlay declares it at the root.
+    root_only = {"meta", "purpose", "observability"}
+    assert set(merged) - set(protocol) <= root_only
+    assert "concurrency" not in merged, "hardware.concurrency leaked onto the root document"
+    assert "shutdown_required" not in merged, "hardware.shutdown_required leaked onto the root document"
+
+    # ...and the values are where the schema says they are.
+    assert merged["hardware"]["concurrency"] == pilot["hardware"]["concurrency"]
+    assert merged["hardware"]["shutdown_required"] is True
+    assert provenance["hardware.concurrency"] == "overlay"
+
+
+def test_effective_block_reports_concurrency_from_the_hardware_section() -> None:
+    """`concurrency` is the value a reader needs to reproduce the run, so it must resolve."""
+    effective = _manifest()["effective"]
+    assert effective["concurrency"] is not None
+    assert isinstance(effective["concurrency"], int)
+    assert effective["provenance"]["hardware.concurrency"] == "overlay"
+
+
+def test_merge_of_an_empty_overlay_is_the_identity() -> None:
+    """Keys the overlay never mentions must survive the merge untouched."""
+    from scripts.run_manifest import _deep_merge, load_protocol
+
+    protocol = load_protocol()
+    merged, provenance = _deep_merge(protocol, {})
+    assert merged == protocol
+    assert provenance == {}
 
 
 # --------------------------------------------------- standing prohibitions, re-asserted
@@ -453,3 +523,84 @@ def test_reward_v2_is_offline_only_so_no_run_may_compute_it_inline() -> None:
     reward = protocol.get("reward") or {}
     assert reward, "the protocol must state its reward configuration"
     assert reward.get("offline_only") is not False
+
+
+# --- the `executed` block ---------------------------------------------------------------
+#
+# The manifest hashes the *training* pair (`protocol_1p5b.yaml` + `pilot_rollouts_1p5b.yaml`),
+# but a diagnostic smoke does not run that pair: it runs a materialised eval config, and
+# `collect_baseline_rollouts.py` resolves no `extends:`, so only the materialised file is
+# ever loaded. These tests pin the `executed` block that closes that gap.
+
+
+def test_executed_block_reads_the_settings_the_collector_will_actually_load() -> None:
+    """A materialised config must report the run-level facts, not a null task list."""
+    from scripts.run_manifest import executed_config
+
+    rel = "results/raw/phase6f_unit_probe/merged_config.yaml"
+    target = REPO_ROOT / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    materialised = {
+        "model": {"name": "Qwen/Qwen2.5-Coder-1.5B-Instruct", "revision": "abc123", "adapter": None},
+        "sampling": {"temperature": 1.0, "top_p": 1.0, "seed": 42, "max_tokens_per_turn": 1024},
+        "episode": {
+            "max_turns": "from_task_yaml",
+            "max_tool_calls": "from_task_yaml",
+            "timeout_s_per_rollout": 900,
+        },
+        "run": {
+            "task_subset": ["bugfix_offbyone_pagination"],
+            "rollouts_per_task": 4,
+            "min_valid_rollouts": 4,
+            "min_distinct_rewards": 2,
+            "diagnostic_only": True,
+        },
+        "output": {"run_id": "phase6f_unit_probe"},
+        "tasks": {"split": "train", "heldout_enabled": False},
+        "reward": {"live": "reward_v1", "analysed": "reward_v2", "reward_v2_computed_inline": False},
+        "server": {"cuda_visible_devices": "0", "served_model_name": "Qwen/Qwen2.5-Coder-1.5B-Instruct"},
+        "context": {
+            "max_model_len": 8192,
+            "reserved_completion_tokens": 1024,
+            "safety_margin_tokens": 64,
+        },
+    }
+    try:
+        target.write_text(yaml.safe_dump(materialised, sort_keys=False), encoding="utf-8")
+        block = executed_config(rel)
+    finally:
+        target.unlink(missing_ok=True)
+        if target.parent.is_dir() and not any(target.parent.iterdir()):
+            target.parent.rmdir()
+
+    assert block["present"] is True
+    assert block["materialised"] is True
+    assert block["settings"]["tasks"] == ["bugfix_offbyone_pagination"]
+    assert block["settings"]["rollouts_per_task"] == 4
+    assert block["settings"]["diagnostic_only"] is True
+    assert block["settings"]["heldout_enabled"] is False
+    assert len(block["sha256"]) == 64
+
+
+def test_executed_block_refuses_an_overlay_that_nothing_ever_expands() -> None:
+    """An overlay is not runnable: `extends:` is inert, so its absent keys would raise."""
+    from scripts.run_manifest import executed_config
+
+    block = executed_config("configs/eval/phase6g_diagnostic_smoke.yaml")
+
+    assert block["present"] is True, "the overlay exists; it is simply not materialised"
+    assert block["materialised"] is False
+    assert block["error"] and "extends" in block["error"]
+    assert block["settings"]["model_name"] is None, "no base was merged, so model.name is genuinely absent"
+
+
+def test_executed_block_keeps_a_missing_config_loud() -> None:
+    """A path that does not exist must not be reported as an empty-but-fine executed config."""
+    from scripts.run_manifest import executed_config
+
+    block = executed_config("results/raw/does_not_exist_6f/merged_config.yaml")
+
+    assert block["present"] is False
+    assert block["materialised"] is False
+    assert block["error"]
+    assert block["sha256"] is None

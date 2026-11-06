@@ -1,0 +1,54 @@
+# Phase 6G - runtime verification overlay for the five Phase 6F fixes.
+#
+# ############################################################################
+# ##  STATUS: DIAGNOSTIC ONLY. Not a baseline. Not training evidence.       ##
+# ############################################################################
+#
+# This is Phase 6E's smoke, re-run unchanged, so that the Phase 6F fixes can be
+# observed at runtime rather than only in tests. It is a thin overlay on
+# `configs/eval/baseline_phase6.yaml`, exactly like `phase6e_diagnostic_smoke.yaml`,
+# and every value that a result could be attributed to is inherited unchanged:
+# model name, revision, dtype, max_seq_length, sampling temperature/top_p/seed,
+# max_tokens_per_turn, prompt text, tool versions, episode budgets, reward wiring,
+# context-budget numbers and the verifier.
+#
+# The only differences from Phase 6E are:
+#
+#   * `output.*` - a new run directory. No existing directory is overwritten.
+#   * `run.require_reward_variance` - false. See below.
+#
+# Why `require_reward_variance: false` differs from Phase 6E. Phase 6E ran with it
+# true, and `diagnostic_only` downgraded the resulting `UniformRewardError` from a
+# fatal abort to a logged warning. That downgrade is a *guard bypass*, not a feature,
+# and Phase 6F deliberately did not preserve it: the diagnostic-only veto in
+# `_assess_validity` now makes a zero-variance batch fail acceptance regardless, so the
+# relaxation buys nothing except a path that hides the guard. Phase 6G therefore leaves
+# the guard armed and records the outcome as `baseline_acceptance.passed: false`, which
+# is the behaviour Phase 6F was built to produce and the one worth verifying.
+#
+# `require_reward_variance` is not a model-behaviour setting: it decides whether the
+# harness raises, not what the model is asked or how it is sampled. The model sees
+# identical inputs to Phase 6E.
+
+extends: configs/eval/baseline_phase6.yaml
+
+output:
+  run_id: phase6g_bugfix_offbyone_pagination_20261106T150419Z
+  rollouts: results/raw/phase6g_bugfix_offbyone_pagination_20261106T150419Z/rollouts.jsonl
+  failures: results/raw/phase6g_bugfix_offbyone_pagination_20261106T150419Z/rollouts_failures.jsonl
+  private: results/raw/phase6g_bugfix_offbyone_pagination_20261106T150419Z/rollouts_private.jsonl
+  analysis: results/analysis/phase6g_bugfix_offbyone_pagination_20261106T150419Z.json
+
+run:
+  # The same single approved training-split task as Phase 6E. Not a held-out task.
+  task_subset:
+    - bugfix_offbyone_pagination
+  rollouts_per_task: 4
+  min_valid_rollouts: 4
+  # Non-training evidence, and a structural veto in Phase 6F: this run can never be
+  # accepted as a baseline however well it scores.
+  diagnostic_only: true
+  # Armed, unlike Phase 6E. A zero-variance group must fail acceptance on its own
+  # merits and leave its evidence on disk, which is fix 1 under test.
+  require_reward_variance: true
+  min_distinct_rewards: 2
