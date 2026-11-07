@@ -1,0 +1,76 @@
+# Phase 6I - per-rollout seed derivation smoke. PREPARED, NOT EXECUTED.
+#
+# ############################################################################
+# ##  STATUS: DIAGNOSTIC ONLY. Not a baseline. Not training evidence.       ##
+# ##  Nothing in this file has been run. It is a prepared step only.        ##
+# ############################################################################
+#
+# This is the Phase 6I rehearsal of the Phase 6H smoke
+# (`configs/eval/phase6h_diagnostic_smoke.yaml`, committed in 8dd5ce6). It exists so that
+# the one thing Phase 6H could not do on CPU - show the per-rollout seed derivation
+# working against a live server - can be run later under an explicit authorisation, without
+# anybody re-deriving the configuration under time pressure.
+#
+# What Phase 6G established and what it did not. Phase 6G collected four rollouts and got
+# four identical trajectories, because `seed=42` was sent on every completion call: the
+# four rollouts `rollouts_per_task: 4` promised were one sample recorded four times. That
+# proves a sampling-independence defect in the harness, not a property of the model. It
+# does not show that the model would do better - the model may still produce uniform -1.0
+# rewards once independent seeds are applied, and only a run with independent seeds can
+# tell the two apart.
+#
+# What this run would establish: four distinct seeds make the four rollouts independent
+# samples. That is a statement about the harness. Whether the model scores well is a
+# separate question that four samples cannot settle either way.
+#
+# Every setting a result could be attributed to is inherited unchanged from
+# `configs/eval/baseline_phase6.yaml`: model, revision, dtype, max_seq_length, prompt text,
+# tool versions, episode budgets, reward wiring, context budget, verifier, temperature and
+# top_p.
+#
+# Differences from the Phase 6H smoke: the `output.*` block only. A new run ID, so this run
+# cannot overwrite or be confused with the Phase 6H evidence directory. Every one of these
+# keys is set deliberately: `materialise_eval_config.py` merges exactly one level, so
+# anything omitted here falls back to the base config and would point this run at the
+# `phase6_baseline_1p5b` evidence directory.
+#
+# `sampling.seed` stays 42. It is not the seed the requests carry; it is the base seed the
+# four per-rollout seeds are derived from:
+#
+#     r00 -> 184288048   r01 -> 3168762815   r02 -> 475852200   r03 -> 1693580453
+#
+# which are `plan_seeds(42, ["bugfix_offbyone_pagination"], 4)` and are pinned by
+# analysis/tests/test_phase6h_seed_derivation.py. If they change, this prepared run is no
+# longer the run the tests describe, and the test fails before a GPU is booked.
+
+extends: configs/eval/baseline_phase6.yaml
+
+output:
+  run_id: phase6i_bugfix_offbyone_pagination_20261106T161132Z
+  rollouts: results/raw/phase6i_bugfix_offbyone_pagination_20261106T161132Z/rollouts.jsonl
+  failures: results/raw/phase6i_bugfix_offbyone_pagination_20261106T161132Z/rollouts_failures.jsonl
+  private: results/raw/phase6i_bugfix_offbyone_pagination_20261106T161132Z/rollouts_private.jsonl
+  analysis: results/analysis/phase6i_bugfix_offbyone_pagination_20261106T161132Z.json
+
+sampling:
+  # Restated from the base config so this overlay records the values the run's independence
+  # depends on. Temperature and top_p are untouched: 1.0 / 1.0, as in Phase 6E, 6G and 6H.
+  seed: 42
+  seed_policy: per_rollout
+  seed_derivation: sha256_u32_v1
+
+run:
+  # The same single approved training-split task as Phase 6E, 6G and 6H. Not held-out.
+  task_subset:
+    - bugfix_offbyone_pagination
+  rollouts_per_task: 4
+  min_valid_rollouts: 4
+  # Non-training evidence, and a structural veto: this run can never be accepted as a
+  # baseline however well it scores.
+  diagnostic_only: true
+  # Armed, as in Phase 6G and 6H. With four genuinely independent seeds the guard is
+  # meaningful: if four independent samples still produce one reward value, that is a real
+  # observation about the model. If the four now differ, the fix is visible in the only
+  # place that matters - the summary's distinct_rewards.
+  require_reward_variance: true
+  min_distinct_rewards: 2

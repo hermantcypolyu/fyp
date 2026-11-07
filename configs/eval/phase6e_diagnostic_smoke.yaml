@@ -1,0 +1,60 @@
+# Phase 6E - four-rollout diagnostic smoke overlay.
+#
+# ############################################################################
+# ##  STATUS: DIAGNOSTIC ONLY. Not a baseline. Not training evidence.       ##
+# ############################################################################
+#
+# This file is a *thin overlay* on `configs/eval/baseline_phase6.yaml`, not a second
+# frozen protocol. It exists so that the Phase 6E smoke can be started from one file
+# whose identity is hashed into the run manifest, instead of a dozen command-line flags
+# whose combination no later reader could reconstruct.
+#
+# The inherited values are byte-for-byte the baseline's, and the fields that are allowed
+# to differ are exactly these:
+#
+#   * `output.*`      - a new run directory. `phase6_baseline_1p5b/` is never touched.
+#   * `run.task_subset` / `run.rollouts_per_task` - one task, four rollouts, as approved.
+#   * `run.min_valid_rollouts` - 4, not 6: one task contributes one rollout per sample, so
+#                     the baseline's 6-of-6 rule would fail a batch that is complete.
+#   * `run.diagnostic_only` - true. This is what stops a uniform reward from aborting the
+#                     batch, and what marks the summary as non-training evidence. It
+#                     cannot make an invalid run trainable: `baseline_valid` and
+#                     `training_ready` stay false.
+#
+# Everything a result could be attributed to is inherited and unchanged: model name,
+# revision, dtype, max_seq_length, sampling temperature/top_p/seed/max_tokens_per_turn,
+# prompt text, tool versions, episode budgets, reward wiring, context-budget numbers and
+# the verifier. `phase6e_diagnostic_smoke.yaml` therefore cannot make the model behave
+# differently - only which task it is asked to fix and where the output goes.
+#
+# Merge order is: baseline_phase6.yaml, then this file, deeply. The derived config is
+# materialised once at run start (see the Phase 6E report for the exact command) so that
+# the manifest hashes a concrete file rather than a merge rule.
+
+extends: configs/eval/baseline_phase6.yaml
+
+output:
+  run_id: phase6e_bugfix_offbyone_pagination_20261105T193011Z
+  rollouts: results/raw/phase6e_bugfix_offbyone_pagination_20261105T193011Z/rollouts.jsonl
+  failures: results/raw/phase6e_bugfix_offbyone_pagination_20261105T193011Z/rollouts_failures.jsonl
+  private: results/raw/phase6e_bugfix_offbyone_pagination_20261105T193011Z/rollouts_private.jsonl
+  analysis: results/analysis/phase6e_bugfix_offbyone_pagination_20261105T193011Z.json
+
+run:
+  # Exactly one approved *training-split* task. Chosen over `testupdate_money_api_v2`
+  # because that task is the known pathological case (13 turns, zero tool calls, the
+  # Phase 6.2 overflow) and would confound "does the harness work" with "does the model
+  # loop". It is exercised separately once this smoke passes.
+  task_subset:
+    - bugfix_offbyone_pagination
+  # Four, matching the approved diagnostic scope and the protocol's group size.
+  rollouts_per_task: 4
+  # One task x four rollouts. The baseline's 6-of-6 rule assumes six configured tasks.
+  min_valid_rollouts: 4
+  # Non-training evidence. Also lets a zero-variance batch finish and be inspected
+  # rather than abort, which is the whole point of a diagnostic.
+  diagnostic_only: true
+  # Kept true so the batch is still *reported* as zero-variance; `diagnostic_only`
+  # downgrades that from an exception to a logged warning plus `baseline_valid: false`.
+  require_reward_variance: true
+  min_distinct_rewards: 2
