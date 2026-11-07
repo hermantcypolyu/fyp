@@ -131,7 +131,22 @@ def _base(rm: Any, *, execution_claim: bool = False, **overrides: Any) -> dict[s
 
 
 def _report(rm: Any, config_path: str, *, execution_claim: bool = False, **overrides: Any) -> dict[str, Any]:
+    """An executable report for `config_path`, with the git state supplied explicitly.
+
+    `git.dirty` is injected rather than observed. Reading it from the repository the tests
+    live in made this suite green only while the developer happened to have uncommitted
+    edits: committing the very work these tests cover flips the tree to clean and the
+    assertion below then fails for a reason that has nothing to do with the gate. The
+    property under test - "a claim turns a dirty tree into a blocker" - is a property of
+    `classify_fields`, so the tree state is an input to be set, not an ambient fact to be
+    waited for. The cases that exercise real git behaviour (`test_06*`, `test_07`) run
+    against the throwaway `git_repo` fixture instead, which is where git is the subject.
+    """
+    tree = {"commit": "0" * 40, "branch": "main", "dirty": True, "untracked": [], "untracked_ignored_count": 0}
     manifest = _base(rm, execution_claim=execution_claim, eval_config=config_path, **overrides)
+    # `build_manifest` observes the live repository, so the tree state is replaced after
+    # construction rather than passed in. Only the fields the gate reads are touched.
+    manifest["git"] = {**manifest.get("git", {}), **overrides.get("git", tree)}
     return rm.executable_report(manifest)
 
 
@@ -221,8 +236,8 @@ def test_01_a_dirty_tracked_tree_blocks_an_execution_claim(rm: Any, tmp_path: Pa
     report = _report(rm, str(overlay), execution_claim=True)
 
     assert report["ok"] is False
-    # The tree really is dirty in this repository (this phase's own edits), which is the
-    # point: the gate must not pass just because the config happens to be fine.
+    # The tree is dirty by construction (`_report`), which is the point: the gate must not
+    # pass just because the config happens to be fine.
     assert any("git.dirty" in blocker for blocker in report["blockers"]), report["blockers"]
 
 
@@ -238,7 +253,16 @@ def test_02_a_dirty_tree_does_not_block_a_validate_only_inspection(rm: Any, tmp_
 
 
 def test_03_cli_exits_2_for_a_dirty_tree_under_a_claim(tmp_path: Path) -> None:
-    """Policy A: a refused preflight writes nothing and says so on stderr."""
+    """Policy A: a refused preflight writes nothing and says so on stderr.
+
+    This is the CLI-level companion to `test_01`, and it deliberately does not assert that
+    the tree *is* dirty: the CLI inspects the repository it ships in, which this suite cannot
+    make dirty without mutating the developer's checkout. What it pins down is the outcome
+    the two layers share - exit 2, a refusal on stderr, and no manifest left behind - and
+    that `git.dirty` is named in that refusal whenever the tree is not clean. On a clean tree
+    the same command still exits 2, because this overlay is unmaterialised; `test_01` is the
+    test that isolates the dirty tree as the reason.
+    """
     overlay = tmp_path / "unmaterialised_overlay.yaml"
     overlay.write_text("model:\n  name: Qwen/Qwen2.5-Coder-1.5B-Instruct\n", encoding="utf-8")
     target = tmp_path / "out"
@@ -256,7 +280,8 @@ def test_03_cli_exits_2_for_a_dirty_tree_under_a_claim(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 2, result.stdout + result.stderr
-    assert "git.dirty" in result.stderr
+    assert "refusing" in result.stderr and "does not describe a runnable" in result.stderr, result.stderr
+    assert "nothing was written" in result.stderr, result.stderr
     assert not target.exists(), "a refused preflight must leave no manifest behind"
 
 
