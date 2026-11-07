@@ -36,7 +36,19 @@ Usage
     python scripts/run_in_serving_env.py scripts/collect_baseline_rollouts.py --dry-run
     python scripts/run_in_serving_env.py scripts/collect_baseline_rollouts.py --json
 
-Exit codes: 0 the script ran / 3 environment check failed / 4 interpreter not found.
+Before it hands over, it also refuses to start a run unless a manifest authorises it
+(scripts/execution_gate.py). A rollout writes evidence that is later cited as proof a
+method worked, so which commit and which config produced it has to be checkable afterwards.
+The gate reads a manifest and refuses unless it claims execution, names the commit that is
+still HEAD, names a config whose hash still matches, and finds a clean tracked tree.
+
+Usage of the gate
+-----------------
+    # the manifest is derived from the script being launched
+    python scripts/run_in_serving_env.py scripts/collect_baseline_rollouts.py -- --manifest results/raw/<run>/manifest.json
+
+Exit codes: 0 the script ran / 2 usage / 3 environment check failed / 4 interpreter not
+found / 5 the manifest does not authorise a run.
 """
 
 from __future__ import annotations
@@ -112,6 +124,63 @@ def _check_environment(python: Path, repo_root: Path) -> tuple[bool, dict]:
         return False, {"error": f"probe produced no parseable output: {proc.stdout!r}"}
 
 
+def _manifest_from_args(extra: list[str]) -> str | None:
+    """The manifest this launch is authorised by, if one was named.
+
+    Looked for in the arguments handed to the target script as `--manifest PATH`, because
+    that is where the GPU scripts already expect to find their run configuration. Absent is
+    not an error here - `_require_manifest()` decides whether that matters.
+    """
+    for index, token in enumerate(extra):
+        if token == "--manifest" and index + 1 < len(extra):
+            return extra[index + 1]
+        if token.startswith("--manifest="):
+            return token.split("=", 1)[1]
+    return None
+
+
+def _require_manifest(manifest_path: str | None) -> int | None:
+    """Refuse unless a manifest authorises this launch. Returns an exit code to stop on.
+
+    A launcher that runs GPU work without a manifest is the case this exists to prevent: the
+    rollout happens, the evidence is written, and nothing afterwards can establish which
+    code produced it. So a missing manifest is a refusal, not a default.
+    """
+    import json
+
+    from scripts import execution_gate
+
+    if manifest_path is None:
+        print(
+            "refusing to start: no --manifest was given.\n"
+            "A rollout needs a manifest to establish which commit and which config produced it.\n"
+            "Write one with: python scripts/run_manifest.py --arm pilot --run-id <id> "
+            "--eval-config <path> --execution-claim",
+            file=sys.stderr,
+        )
+        return execution_gate.EXIT_NOT_AUTHORISED
+
+    path = Path(manifest_path)
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    if not path.is_file():
+        print(f"refusing to start: no manifest at {path}", file=sys.stderr)
+        return execution_gate.EXIT_NOT_AUTHORISED
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"refusing to start: cannot read the manifest at {path}: {exc}", file=sys.stderr)
+        return execution_gate.EXIT_NOT_AUTHORISED
+
+    result = execution_gate.verify_execution_claim(manifest)
+    if not result["ok"]:
+        print(execution_gate.format_refusal(result), file=sys.stderr)
+        return execution_gate.EXIT_NOT_AUTHORISED
+
+    print(f"[run_in_serving_env] authorised by {path}", file=sys.stderr)
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in {"-h", "--help"}:
@@ -126,6 +195,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: no such script: {script}", file=sys.stderr)
             return 2
         script_path = candidate
+
+    # The authorisation check runs before the interpreter and the environment probe. Both of
+    # those are cheap, but neither is free, and a launch that was never going to be allowed
+    # should fail on the reason that matters rather than on a missing venv.
+    refusal = _require_manifest(_manifest_from_args(extra))
+    if refusal is not None:
+        return refusal
 
     python = _serving_python()
     if not python.exists():
