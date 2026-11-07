@@ -44,8 +44,8 @@ import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from pathlib import Path, PurePosixPath
+from typing import Any, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -114,20 +114,50 @@ def config_hash(rel_path: str) -> dict[str, Any]:
     return {"path": rel_path, "sha256": sha256_of(path), "present": path.is_file()}
 
 
-def git_version() -> dict[str, Any]:
-    """Commit, branch, and whether the tree was clean when the manifest was written.
+def _untracked_paths() -> list[str] | None:
+    """Paths git knows about that are not tracked, or None when git is unavailable.
 
-    `dirty` is recorded because a manifest from a dirty tree names a commit that does not
-    contain the code that ran. It is a warning, not an error: blocking on it would make
-    people stop generating manifests, which is worse.
+    `--exclude-standard` applies `.gitignore`, so ignored files (everything under
+    `results/`) are absent - which is the point. An untracked *source* or *config* file is a
+    different animal from an untracked run artefact: the former means the code that ran
+    may not exist in the commit the manifest names, and the latter is a by-product.
+    """
+    listing = _run(["git", "ls-files", "--others", "--exclude-standard"])
+    if listing is None:
+        return None
+    return [line for line in listing.splitlines() if line.strip()]
+
+
+def git_version() -> dict[str, Any]:
+    """Commit, branch, and what state the working copy was in when the manifest was written.
+
+    Three facts are recorded rather than one, because they mean different things to a
+    reader deciding whether a run may start:
+
+    * `dirty` - tracked files differ from HEAD. The manifest names a commit that does not
+      contain the code that ran. This *is* an execution blocker when the manifest claims to
+      authorise a run; see `execution_claim`.
+    * `untracked` - files git does not track and `.gitignore` does not exclude. A stray
+      untracked config can silently change what a run picks up, so it is reported
+      separately rather than folded into `dirty`, where a `results/` artefact would look
+      indistinguishable from an uncommitted source edit.
+    * `untracked_ignored_count` - the number of ignored files that exist (mostly under
+      `results/`). Recorded so nobody has to guess whether an empty untracked list meant
+      "nothing there" or "nothing that counts". These never influence execution.
     """
     commit = _run(["git", "rev-parse", "HEAD"])
     branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+    # `--untracked-files=no` on purpose: `dirty` answers "did tracked content change?", and
+    # an untracked file cannot change what a commit contains.
     status = _run(["git", "status", "--porcelain", "--untracked-files=no"])
+    untracked = _untracked_paths()
+    ignored = _run(["git", "ls-files", "--others", "--ignored", "--exclude-standard"])
     return {
         "commit": commit,
         "branch": branch,
         "dirty": None if status is None else bool(status),
+        "untracked": untracked,
+        "untracked_ignored_count": None if ignored is None else len([ln for ln in ignored.splitlines() if ln.strip()]),
     }
 
 
@@ -377,10 +407,23 @@ def unresolved_fields(manifest: dict[str, Any]) -> list[str]:
         walk(manifest.get("protocol", {}).get(key), f"protocol.{key}")
     # A pilot run whose overlay was edited away, or whose tasks list is still unset, is a
     # gap worth naming rather than a detail hidden inside the hashed file.
+    #
+    # The overlay placeholder is *not* the executed identity. `pilot_rollouts_1p5b.yaml`
+    # ships `rollouts.tasks: null` on purpose ("not decided, not invented"), but a run that
+    # executes a materialised eval config never reads that file - the collector loads one
+    # config and resolves no `extends:`. So the gap is only blocking when the executed block
+    # is absent or itself incomplete; when the executed settings name a real task list, the
+    # overlay placeholder is recorded as an overlay value and stops blocking. Naming it
+    # anyway would report a decision the run did not need to make, alongside the one it did.
     if manifest.get("pilot", {}).get("applies"):
         if manifest["pilot"].get("file", {}).get("sha256") is None:
             gaps.append("pilot.file (overlay missing)")
-        if manifest["pilot"].get("tasks") is None:
+        executed = manifest.get("executed") or {}
+        executed_tasks = (executed.get("settings") or {}).get("tasks")
+        # Read the nested value: `pilot.values` is where overlay values live, and the
+        # flattened key this used to look at no longer exists.
+        overlay_tasks = (manifest["pilot"].get("values") or {}).get("tasks")
+        if overlay_tasks is None and not executed_tasks:
             gaps.append("pilot.tasks (not yet selected)")
     if not manifest.get("gpu", {}).get("present"):
         gaps.append("gpu (no GPU detected)")
@@ -477,7 +520,149 @@ def effective_settings(
 # materialised config. `model.adapter` is the only one: the checked-in baseline writes
 # `adapter: null` to say "base model", but a merge that simply never mentions it states the
 # same thing, and refusing to call that materialised would be pedantry that hides real gaps.
-OPTIONAL_IN_EXECUTED = frozenset({"model.adapter"})
+#
+# The three update-related keys are optional for a different reason: they are properties of
+# the *pilot overlay*, and a sample-and-collect eval config has no reason to restate them.
+# Their absence means "this config says nothing about updating", which is not the same as
+# "this config updates" - so they are read as None rather than as a missing key, and the
+# executability gate treats None as "no update", never as "unknown update".
+OPTIONAL_IN_EXECUTED = frozenset(
+    {
+        "model.adapter",
+        "run.optimizer_enabled",
+        "run.training_iterations",
+        "run.expect_output_checkpoint",
+    }
+)
+
+#: The `settings` names that a null value is allowed to carry. `adapter` is the setting
+#: name for the dotted `model.adapter` above; the two spellings are kept apart because the
+#: dotted form addresses the config file and this one addresses the flattened record. The
+#: update-related names join it for the reason given above: their absence is an answer.
+OPTIONAL_IN_EXECUTED_NAMES: frozenset[str] = frozenset(
+    {"adapter", "optimizer_enabled", "training_iterations", "expect_output_checkpoint"}
+)
+
+# --- artifact path mapping -------------------------------------------------------------
+#
+# One table, read by everything that relates a collector output key to a manifest field.
+# Before this existed the relation was spelled out in three places (the extraction loop,
+# the presence check, and the report), each with its own idea of which name meant what -
+# which is how `output.private` came to be checked against `artifacts.private` and reported
+# missing while `artifacts.private_trace` held the value all along.
+#
+# The table is the *only* place the correspondence is written down. `EXECUTED_OUTPUT_MAP`
+# maps a collector `output.<key>` onto the manifest field it populates; `run_dir` and
+# `summary` are derived rather than read, because the collector derives them too.
+
+
+class OutputMapping(NamedTuple):
+    """Where one collector output key lands in the manifest.
+
+    `field` is the `executed.artifacts` name the raw path is recorded under. `derive`
+    names the transformation applied to that path, because two of the five destinations
+    are not the configured path itself:
+
+      * ``run_dir`` is the *directory holding* the public rollout file;
+      * ``summary`` is the collector's `collection_summary.json` written *beside* it.
+
+    Making the derivation part of the table (rather than a special case in a loop) means a
+    reader can see, in one place, that every required output has exactly one destination.
+    """
+
+    key: str
+    field: str
+    derive: str | None = None
+    required: bool = False
+
+
+#: The authoritative mapping. Order is the order a reader expects to meet these paths.
+#: `output.rollouts` feeds two fields: the trace itself and the directory it lives in, which
+#: is why `run_dir` is a `derive` entry on the same key rather than a separate config key
+#: (there is no `output.run_dir`, and inventing one would let the two disagree).
+OUTPUT_MAP: tuple[OutputMapping, ...] = (
+    OutputMapping(key="rollouts", field="trace", required=True),
+    OutputMapping(key="rollouts", field="run_dir", derive="parent", required=True),
+    OutputMapping(key="private", field="private_trace", required=True),
+    OutputMapping(key="failures", field="failures", required=True),
+    OutputMapping(key="rollouts", field="summary", derive="sibling:collection_summary.json", required=True),
+)
+
+#: `output.<key>` -> the `executed.artifacts` field it fills, for the one-to-one entries.
+EXECUTED_OUTPUT_ALIASES: dict[str, str] = {
+    mapping.key: mapping.field for mapping in OUTPUT_MAP if mapping.derive is None
+}
+
+#: The `output.*` keys a materialised run config must name. Derived from the map so this
+#: list cannot drift from the mapping it describes.
+EXECUTED_REQUIRED_OUTPUTS: tuple[str, ...] = tuple(
+    dict.fromkeys(mapping.key for mapping in OUTPUT_MAP if mapping.required)
+)
+
+#: Every `executed.artifacts` field the map can populate. Used by the presence check.
+EXECUTED_ARTIFACT_FIELDS: tuple[str, ...] = tuple(dict.fromkeys(mapping.field for mapping in OUTPUT_MAP))
+
+
+#: The manifest artifact fields that exist, for validating the map and rejecting typos.
+KNOWN_ARTIFACT_FIELDS: frozenset[str] = frozenset(
+    {"run_dir", "trace", "private_trace", "failures", "summary", "log", "server_pid"}
+)
+
+
+def _check_output_map() -> None:
+    """Reject a mapping table that would let two outputs fight over one field.
+
+    Called at import time. A duplicate field would silently make one requirement
+    unverifiable - the second write would always win and the first output's absence would
+    never be noticed - so it is refused loudly rather than tolerated.
+    """
+    fields = [mapping.field for mapping in OUTPUT_MAP]
+    duplicates = sorted({field for field in fields if fields.count(field) > 1})
+    if duplicates:
+        raise ValueError(f"OUTPUT_MAP assigns more than one output to {duplicates}")
+    keys = {mapping.key for mapping in OUTPUT_MAP}
+    unknown = sorted(keys - set(EXECUTED_REQUIRED_OUTPUTS) - {"rollouts", "private", "failures"})
+    if unknown:
+        raise ValueError(f"OUTPUT_MAP names output keys the collector never opens: {unknown}")
+    for mapping in OUTPUT_MAP:
+        if mapping.field not in KNOWN_ARTIFACT_FIELDS:
+            raise ValueError(f"OUTPUT_MAP writes {mapping.field!r}, which is not a manifest artifact field")
+
+
+_check_output_map()
+
+
+def _apply_derive(value: str, derive: str) -> str:
+    """Transform a configured path into the manifest field it feeds.
+
+    ``parent`` is the containing directory; ``sibling:<name>`` replaces the leaf with a
+    file of that name in the same directory. Both go through `PurePosixPath` so a config
+    written with forward slashes normalises the same way on any platform, and a path is
+    never rewritten to something the collector would not actually open.
+    """
+    path = PurePosixPath(value)
+    if derive == "parent":
+        return str(path.parent)
+    if derive.startswith("sibling:"):
+        return str(path.parent / derive.split(":", 1)[1])
+    raise ValueError(f"unknown derive rule {derive!r}")
+
+
+def map_outputs(raw_outputs: dict[str, Any]) -> dict[str, str | None]:
+    """Turn a materialised config's `output` block into manifest artifact fields.
+
+    Returns every field the map can fill, with `None` where the config named no path. The
+    caller decides whether a `None` is disqualifying; this function does not guess, because
+    a pilot manifest legitimately has no executed config to read at all.
+    """
+    mapped: dict[str, str | None] = {}
+    for mapping in OUTPUT_MAP:
+        raw = raw_outputs.get(mapping.key)
+        if not isinstance(raw, str):
+            mapped[mapping.field] = None
+            continue
+        mapped[mapping.field] = _apply_derive(raw, mapping.derive) if mapping.derive else raw
+    return mapped
 
 
 def executed_config(rel_path: str) -> dict[str, Any]:
@@ -528,6 +713,24 @@ def executed_config(rel_path: str) -> dict[str, Any]:
             node = node[part]
         return node
 
+    # The run's *intended* artifact paths, read from the same file the collector loads.
+    #
+    # These are separate from `build_manifest`'s `artifacts` block on purpose: this one is
+    # the intent recorded by the config (what the run will write), that one is the observed
+    # reality after execution (what was written, plus the server PID and log). Recording the
+    # intent here is what stops a planned run from showing `artifacts.run_dir: null` and
+    # being indistinguishable from a manifest that never named a run directory at all.
+    #
+    # The correspondence itself lives in `OUTPUT_MAP`, not here. This block only decides how
+    # to read a config that may be missing a key; the mapping decides where each key lands.
+    raw_output = raw.get("output")
+    artifacts = map_outputs(raw_output if isinstance(raw_output, dict) else {})
+    record["artifacts"] = artifacts
+    record["artifacts_log"] = (
+        "these paths are the *intended* outputs declared by the config; the top-level "
+        "`artifacts` block records what the run actually produced"
+    )
+
     wanted = {
         "run_id": "output.run_id",
         "tasks": "run.task_subset",
@@ -547,6 +750,14 @@ def executed_config(rel_path: str) -> dict[str, Any]:
         "timeout_s_per_rollout": "episode.timeout_s_per_rollout",
         "split": "tasks.split",
         "heldout_enabled": "tasks.heldout_enabled",
+        # The three facts that say whether this is a rollout-only run. An eval config may
+        # legitimately omit them - they are properties of the *pilot overlay*, not of a
+        # sample-and-collect config - so they are read with `_dig_optional` below rather
+        # than counted as missing keys. A run that silently accepted `optimizer_enabled:
+        # true` would update weights under a manifest claiming it did not.
+        "optimizer_enabled": "run.optimizer_enabled",
+        "training_iterations": "run.training_iterations",
+        "expect_output_checkpoint": "run.expect_output_checkpoint",
         "reward_live": "reward.live",
         "reward_analysed": "reward.analysed",
         "reward_v2_computed_inline": "reward.reward_v2_computed_inline",
@@ -571,10 +782,49 @@ def executed_config(rel_path: str) -> dict[str, Any]:
 
     # An overlay is not materialised, so it cannot drive a run. Say that plainly rather
     # than emitting a settings block full of nulls that look like deliberate choices.
+    #
+    # The artifact paths are part of the same check. A file that defines the model and the
+    # sampler but not where the run writes its evidence is not a run config: the collector
+    # would raise on the first `output_path()` call, after the server was already up.
+    #
+    # A required output is satisfied when *any* field it maps to is populated, which is why
+    # this reads the map rather than re-deriving the field name. Reading the wrong field
+    # is exactly how `output.private` was once reported missing while `private_trace` held
+    # its value.
+    missing_outputs = sorted(
+        f"output.{key}"
+        for key in EXECUTED_REQUIRED_OUTPUTS
+        if not any(artifacts.get(mapping.field) for mapping in OUTPUT_MAP if mapping.key == key)
+    )
+    for dotted in missing_outputs:
+        if dotted not in missing:
+            missing.append(dotted)
+
+    # The executed settings are the authoritative record of what the run used. Reporting
+    # `materialised: true` while `settings.tasks` is null would let a run pass preflight
+    # carrying no statement about which task it collects.
+    #
+    # `model.adapter` is exempt for the same reason it is exempt above: `adapter: null`
+    # means "run the base model", which is a decision the checked-in baseline states out
+    # loud. Counting it as a gap would make every base-model run look incomplete.
+    if not missing:
+        empty = sorted(
+            name for name, value in settings.items() if value is None and name not in OPTIONAL_IN_EXECUTED_NAMES
+        )
+        if empty:
+            record["error"] = (
+                "this file is materialised but its executed settings are incomplete: "
+                + ", ".join(empty)
+                + ". A run whose task list, rollout count or model identity is unrecorded "
+                "cannot be checked against what it executed."
+            )
+        record["settings_complete"] = not empty
+
     record["settings"] = settings
     record["materialised"] = not missing
     if missing:
         record["missing"] = missing
+        record["settings_complete"] = False
         record["error"] = (
             "this file is not a materialised run config: it omits "
             + ", ".join(missing)
@@ -593,6 +843,15 @@ def build_manifest(
     output_checkpoint: str | None,
     note: str | None,
     eval_config: str | None = None,
+    # Where this manifest will be written. Used only as a fallback for `artifacts.run_dir`
+    # when the executed config names no paths of its own; a manifest describes the
+    # directory it lives in, so that directory is always a true answer.
+    out_dir: Path | None = None,
+    # Whether this manifest authorises a real rollout. `False` (the default) means it is an
+    # inspection report: honest about what a run would do, but never accepted by the
+    # launcher. `True` means the caller intends to execute, which is what makes a dirty tree
+    # and an untracked config file into blockers instead of notes.
+    execution_claim: bool = False,
 ) -> dict[str, Any]:
     if arm not in ARM_CONFIGS:
         raise ValueError(f"unknown arm {arm!r}; expected one of {sorted(ARM_CONFIGS)}")
@@ -600,6 +859,9 @@ def build_manifest(
     protocol = load_protocol()
     pilot = load_pilot()
     now = datetime.now(UTC).isoformat()
+    # Read once. `executed_config` hashes the file and parses it, and the `artifacts` block
+    # below needs the same parse - reading twice invites the two blocks to disagree.
+    executed = executed_config(eval_config) if eval_config else None
 
     arm_config = ARM_CONFIGS[arm]
     manifest: dict[str, Any] = {
@@ -642,7 +904,7 @@ def build_manifest(
         #    and Phase 6E's manifest reported 8 rollouts for a run that executed 4 because
         #    nothing recorded the second file. Null when the caller did not name one, which
         #    is honest: this manifest then makes no claim about what ran.
-        "executed": executed_config(eval_config) if eval_config else None,
+        "executed": executed,
         # -- the rollout-only overlay, recorded so a pilot run names the file that
         #    defined it rather than only the formal protocol it did not execute.
         #    The file hash is unconditional: it answers "did the overlay exist and has
@@ -650,35 +912,51 @@ def build_manifest(
         #    settings are null on other arms, because a baseline manifest asserting
         #    `training_iterations: 0` from a file it never read would be a false claim
         #    dressed up as completeness. -----------------------------------------------
+        #
+        #    Everything under `values` is read from the overlay *file*, not from the run.
+        #    `values.tasks: null` and `values.rollouts_per_task: 8` are that file's shipped
+        #    placeholders and are deliberately not reconciled with what executed: the
+        #    overlay says what a pilot would use, `executed.settings` says what this run
+        #    did. Nothing reads `pilot.values` to decide a run's identity. A run that
+        #    executes a materialised eval config never loads this file at all.
         "pilot": {
             "applies": arm in NON_UPDATING_ARMS,
+            "values_from": "overlay_file",
+            "values_note": (
+                "read from the overlay file; placeholders such as tasks: null are "
+                "overlay values, not the executed identity - see executed.settings"
+            ),
             "file": config_hash(PILOT_CONFIG),
             "name": pilot.get("meta", {}).get("name") if arm in NON_UPDATING_ARMS else None,
             "formal_protocol": (pilot.get("meta", {}).get("formal_protocol") if arm in NON_UPDATING_ARMS else None),
             "performs_parameter_update": (
                 (pilot.get("purpose") or {}).get("performs_parameter_update") if arm in NON_UPDATING_ARMS else None
             ),
-            "training_iterations": (
-                (pilot.get("training") or {}).get("training_iterations") if arm in NON_UPDATING_ARMS else None
-            ),
-            "optimizer_enabled": (
-                (pilot.get("training") or {}).get("optimizer_enabled") if arm in NON_UPDATING_ARMS else None
-            ),
-            "expect_output_checkpoint": (
-                (pilot.get("training") or {}).get("expect_output_checkpoint") if arm in NON_UPDATING_ARMS else None
-            ),
-            "rollouts_per_task": (
-                (pilot.get("rollouts") or {}).get("rollouts_per_task") if arm in NON_UPDATING_ARMS else None
-            ),
-            "tasks": (pilot.get("rollouts") or {}).get("tasks") if arm in NON_UPDATING_ARMS else None,
-            "concurrency": (pilot.get("hardware") or {}).get("concurrency") if arm in NON_UPDATING_ARMS else None,
-            "heldout_enabled": (pilot.get("data") or {}).get("heldout_enabled") if arm in NON_UPDATING_ARMS else None,
-            "reward_offline_only": (
-                (pilot.get("reward") or {}).get("offline_only") if arm in NON_UPDATING_ARMS else None
-            ),
-            "reward_v2_computed_inline": (
-                (pilot.get("reward") or {}).get("reward_v2_computed_inline") if arm in NON_UPDATING_ARMS else None
-            ),
+            "values": {
+                "training_iterations": (
+                    (pilot.get("training") or {}).get("training_iterations") if arm in NON_UPDATING_ARMS else None
+                ),
+                "optimizer_enabled": (
+                    (pilot.get("training") or {}).get("optimizer_enabled") if arm in NON_UPDATING_ARMS else None
+                ),
+                "expect_output_checkpoint": (
+                    (pilot.get("training") or {}).get("expect_output_checkpoint") if arm in NON_UPDATING_ARMS else None
+                ),
+                "rollouts_per_task": (
+                    (pilot.get("rollouts") or {}).get("rollouts_per_task") if arm in NON_UPDATING_ARMS else None
+                ),
+                "tasks": (pilot.get("rollouts") or {}).get("tasks") if arm in NON_UPDATING_ARMS else None,
+                "concurrency": ((pilot.get("hardware") or {}).get("concurrency") if arm in NON_UPDATING_ARMS else None),
+                "heldout_enabled": (
+                    (pilot.get("data") or {}).get("heldout_enabled") if arm in NON_UPDATING_ARMS else None
+                ),
+                "reward_offline_only": (
+                    (pilot.get("reward") or {}).get("offline_only") if arm in NON_UPDATING_ARMS else None
+                ),
+                "reward_v2_computed_inline": (
+                    (pilot.get("reward") or {}).get("reward_v2_computed_inline") if arm in NON_UPDATING_ARMS else None
+                ),
+            },
         },
         # -- what the numbers mean ---------------------------------------------------
         "reward": {
@@ -705,10 +983,291 @@ def build_manifest(
         #    because the run that crashes is the one whose manifest matters most.
         "timing": {"started_at": now, "finished_at": None, "duration_s": None},
         "outcome": {"status": "planned", "failure_reason": None},
-        "artifacts": {"run_dir": None, "trace": None, "log": None, "server_pid": None},
+        # -- what this manifest claims. `True` means "a launcher may act on this"; `False`
+        #    means "this is a description, not an authorisation". Recorded as its own field
+        #    rather than inferred from `executed` being present, because a diagnostic smoke
+        #    declares an eval config without ever being allowed to start one.
+        "execution_claim": bool(execution_claim),
+        # -- what the run intends to write. Populated at manifest creation from the config
+        #    the collector will load, so a planned run names its own directory and trace
+        #    instead of leaving the reader to infer them from the run id. `log` and
+        #    `server_pid` stay null here on purpose: they are facts about a process that has
+        #    not started, and a manifest written before a run is the one that matters most.
+        "artifacts": _artifacts_block(
+            executed,
+            out_dir=out_dir if out_dir is not None else REPO_ROOT / "results" / "raw" / run_id,
+        ),
     }
     manifest["unresolved"] = unresolved_fields(manifest)
     return manifest
+
+
+#: Why a field is null, for the three cases that are not gaps. Keys are the dotted paths
+#: `unresolved_fields` would otherwise report; values are the reason a reader is owed.
+#: Recording the reason is the difference between "nobody decided" and "there is nothing
+#: to decide", and the two must not print identically.
+NOT_APPLICABLE_REASONS: dict[str, str] = {
+    "protocol.grpo.kl_coefficient": (
+        "no reference-policy KL term exists in the current controlled implementation "
+        "(kl_coefficient_status: NOT_APPLICABLE_CURRENT_IMPLEMENTATION)"
+    ),
+}
+
+#: Manifest fields that are legitimately null before a run starts. Reported as warnings so
+#: a reader knows they are pending rather than missing.
+PENDING_AFTER_STARTUP: dict[str, str] = {
+    "artifacts.log": "the server writes its log only once it has started",
+    "artifacts.server_pid": "the server PID does not exist until the server starts",
+}
+
+#: Gaps about the *machine*, not about the executed config. Whether each one blocks depends
+#: entirely on what the manifest claims to be. Two manifests can describe the same run from
+#: the same dirty tree and one of them must be refused, so the mode is a property of the
+#: manifest (`execution_claim`), not of the environment.
+#:
+#: With `execution_claim: false` the manifest is an inspection report: it exists to be read
+#: on a laptop, and a missing GPU or an uncommitted edit is information, not an obstacle.
+#: With `execution_claim: true` the manifest authorises a real rollout, and then a dirty
+#: tree is disqualifying: the commit it names does not contain the code that would run.
+ENVIRONMENTAL_FIELDS: dict[str, tuple[str, str]] = {
+    # field: (reason, the reason it matters when a run is actually going to start)
+    "git.dirty (tree had uncommitted changes)": (
+        "the manifest names a commit that does not contain the code that ran",
+        "a run from a dirty tree is not reproducible from the commit it names",
+    ),
+    "gpu (no GPU detected)": (
+        "no GPU on this machine; the manifest records that rather than assuming one",
+        "a rollout needs the model server, which needs a GPU",
+    ),
+}
+
+#: Kept as the flat warning table for CPU inspection, so existing readers keep working.
+ENVIRONMENTAL_WARNINGS: dict[str, str] = {field: reason for field, (reason, _) in ENVIRONMENTAL_FIELDS.items()}
+
+#: The two modes a manifest can be written in. `True` means "this authorises a rollout";
+#: `False` means "this is a description for a reader". The distinction is recorded in the
+#: manifest itself so a launcher can check the claim rather than infer it from which flags
+#: the operator happened to pass.
+EXECUTION_CLAIMS: frozenset[bool] = frozenset({True, False})
+
+
+def classify_fields(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Split the manifest's gaps into blockers, warnings and not-applicable fields.
+
+    Three different things were previously printed as one `unresolved` list: a value the
+    run needs and does not have (a blocker), a value that arrives later by construction (a
+    warning), and a value that does not exist in this implementation and never will (not
+    applicable). Collapsing them meant a KL coefficient that can never be filled in looked
+    as alarming as a missing task list, which is how a real blocker gets scrolled past.
+
+    The fourth distinction is the one that shapes this function: a gap can be blocking *for
+    an execution claim* and harmless for an inspection report. `git.dirty` is the clearest
+    case. Refusing to write a manifest from a dirty tree made the tool unusable during
+    development; accepting a manifest from a dirty tree *as authorisation to run* is what is
+    actually unsafe. So the classification reads `execution_claim` and a dirty tree only
+    blocks when the manifest claims a run.
+
+    Only `blockers` may stop a run. `warnings` are true, expected states; `not_applicable`
+    entries are recorded so a reader does not go looking for a decision that was never
+    available to make.
+    """
+    raw_gaps = unresolved_fields(manifest)
+    claims_execution = manifest.get("execution_claim") is True
+
+    not_applicable = [{"field": field, "reason": reason} for field, reason in NOT_APPLICABLE_REASONS.items()]
+    na_fields = set(NOT_APPLICABLE_REASONS)
+
+    warnings = [{"field": field, "reason": reason} for field, reason in PENDING_AFTER_STARTUP.items()]
+    warned_fields = set(PENDING_AFTER_STARTUP)
+    blockers = [field for field in raw_gaps if field not in na_fields and field not in warned_fields]
+
+    # Environmental gaps: a warning for an inspection report, a blocker for an execution
+    # claim. `git.dirty` is checked here rather than only in `executable_report` so that one
+    # function owns the answer and the launcher cannot reach a different conclusion.
+    for field, (inspection_reason, execution_reason) in ENVIRONMENTAL_FIELDS.items():
+        if field not in blockers:
+            continue
+        if claims_execution:
+            blockers[blockers.index(field)] = f"{field}: {execution_reason}"
+        else:
+            blockers.remove(field)
+            warnings.append({"field": field, "reason": inspection_reason})
+            warned_fields.add(field)
+
+    # An untracked source or config file is reported separately from `dirty`: it cannot
+    # change what a commit contains, but it *can* change what a run picks up, so it must not
+    # be invisible either. It blocks an execution claim for that reason.
+    untracked = [path for path in (manifest.get("git", {}).get("untracked") or []) if path]
+    if untracked:
+        detail = f"untracked files not under an ignored path: {', '.join(sorted(untracked))}"
+        if claims_execution:
+            blockers.append(detail + " (they may change what the run picks up)")
+        else:
+            warnings.append({"field": "git.untracked", "reason": detail})
+
+    return {
+        "blockers": blockers,
+        "warnings": warnings,
+        "not_applicable": not_applicable,
+        # Kept for readers of the older one-list shape. It is the *union*, not the blockers,
+        # so an existing consumer still sees every gap exactly once.
+        "unresolved": raw_gaps,
+    }
+
+
+def executable_report(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Whether this manifest describes a run that could be started, and why not if it cannot.
+
+    A manifest that names a config has to name a *runnable* one. `executed.materialised`
+    answers "did the file contain the keys", but a materialised file whose task list or
+    rollout count parsed as null would still pass that test while leaving the run
+    unattributable. This closes the last gap: the executed settings must be present, the
+    artifact paths the collector opens must be declared, and the run must be the kind of run
+    the arm claims to be.
+
+    Deliberately does not look at `artifacts.log` or `artifacts.server_pid`. Both are null
+    before a server starts, by design, and treating their nullness as a failure would make
+    every manifest written before a run look broken.
+
+    Two questions are answered here, and the manifest's `execution_claim` decides which one:
+
+    * *May anything act on this?* - blocked by the executed config, the settings, the
+      declared outputs, and the shape of the run. These are wrong regardless of mode, so
+      they block an inspection report too: an inspection of a broken config is a false
+      report.
+    * *May a rollout start from this?* - additionally requires a clean tracked tree, no
+      untracked source or config files, and a commit that is still HEAD. A dirty tree does
+      not make the *description* wrong; it makes the *authorisation* worthless.
+
+    That is why `git.dirty` is only mode-dependent and not simply a blocker: refusing to
+    write a manifest on a laptop mid-edit is what made the tool unusable, and accepting one
+    as a licence to run is what is actually unsafe. The claim separates the two.
+
+    The returned `blockers` are hard stops. `warnings` and `not_applicable` are reported so
+    the caller can print them, but neither can stop a run.
+    """
+    claims_execution = manifest.get("execution_claim") is True
+    executed = manifest.get("executed")
+    if executed is None:
+        # No `--eval-config` was given, so there is no executed config to vouch for. That is
+        # honest for a training arm. But an *execution claim* with nothing to execute is a
+        # contradiction: the manifest says a launcher may start a run it cannot describe.
+        if claims_execution:
+            return {
+                "ok": False,
+                "reason": "execution_claim is true but no exec config was recorded",
+                "blockers": ["execution_claim is true yet executed is null: there is no config to execute"],
+                "warnings": [],
+                "not_applicable": [],
+                "status": "preflight_failed",
+            }
+        return {
+            "ok": True,
+            "reason": None,
+            "blockers": [],
+            "warnings": [],
+            "not_applicable": [],
+            "status": "no_execution_claim",
+        }
+
+    settings = executed.get("settings") or {}
+    artifacts = manifest.get("artifacts") or {}
+    blockers: list[str] = []
+
+    # -- the config itself -----------------------------------------------------------
+    if not executed.get("materialised"):
+        blockers.append("executed.materialised is false: the file is an overlay, not a run config")
+    if executed.get("settings_complete") is False:
+        empty = sorted(name for name, value in settings.items() if value is None)
+        blockers.append("executed.settings is incomplete: " + (", ".join(empty) or "unknown field"))
+
+    # -- the settings a run cannot start without -------------------------------------
+    if not settings.get("tasks"):
+        blockers.append("no executed task: executed.settings.tasks is null or empty")
+    if not settings.get("rollouts_per_task"):
+        blockers.append("rollouts_per_task is missing from executed.settings")
+    if not settings.get("model_name") or not settings.get("model_revision"):
+        blockers.append("model identity is incomplete: executed.settings.model_name/model_revision must both be set")
+
+    # -- the paths the collector will open -------------------------------------------
+    for mapping in OUTPUT_MAP:
+        if mapping.required and artifacts.get(mapping.field) is None:
+            blockers.append(f"required output path missing: output.{mapping.key} (to artifacts.{mapping.field})")
+    for key in ("run_dir", "trace"):
+        if artifacts.get(key) is None:
+            blockers.append(f"artifacts.{key} is null")
+
+    # -- the shape of the run --------------------------------------------------------
+    if settings.get("heldout_enabled") is not False:
+        blockers.append("heldout_enabled must be false: the held-out split is sealed")
+    if settings.get("optimizer_enabled"):
+        blockers.append("optimizer_enabled is true: a rollout-only diagnostic run updates nothing")
+    if settings.get("training_iterations"):
+        blockers.append(
+            f"training_iterations is {settings['training_iterations']}: "
+            "a rollout-only diagnostic run performs no updates"
+        )
+    if settings.get("expect_output_checkpoint"):
+        blockers.append("expect_output_checkpoint is true: a rollout-only run produces no checkpoint")
+
+    # -- an execution claim is refused on evidence of drift ---------------------------
+    # These three are cheap to check at creation and catastrophic to get wrong later: a run
+    # launched from a commit that no longer exists, a config edited after the manifest was
+    # written, or a stray config file that the collector might load instead. A launcher
+    # re-checks all of them (scripts/run_in_serving_env.py), because a manifest can be
+    # written on Monday and used on Tuesday.
+    if claims_execution:
+        if executed.get("sha256") is None:
+            blockers.append("execution_claim is true but executed.sha256 is null: the config cannot be re-verified")
+
+    # -- anything else still unresolved ----------------------------------------------
+    classification = classify_fields(manifest)
+    for field in classification["blockers"]:
+        # These are recorded gaps the specific checks above may not cover (a missing GPU
+        # row, an overlay that vanished, an untracked file). They block because nothing has
+        # established that they are safe; a warning would be a claim nobody made.
+        blockers.append(f"unresolved: {field}")
+
+    reason = None
+    if blockers:
+        reason = f"{len(blockers)} blocking condition(s); the manifest does not describe a runnable execute step"
+    return {
+        "ok": not blockers,
+        "reason": reason,
+        "blockers": blockers,
+        "warnings": classification["warnings"],
+        "not_applicable": classification["not_applicable"],
+        "status": "executable" if not blockers else "preflight_failed",
+    }
+
+
+def _artifacts_block(executed: dict[str, Any] | None, *, out_dir: Path) -> dict[str, Any]:
+    """Where this run writes its evidence, taken from the config it will execute.
+
+    Every field is nullable because every field is a claim: a run with no materialised
+    config has no declared paths, and saying so is more useful than guessing
+    `results/raw/<run_id>/rollouts.jsonl` from the run id alone. When the executed block
+    does declare them, they are recorded verbatim - they are the paths the collector will
+    actually open, so the manifest and the run cannot drift apart.
+
+    `run_dir` falls back to the caller's run directory only when the config names none:
+    the manifest is written *into* that directory, so it is always the right answer for a
+    manifest that exists.
+    """
+    declared = (executed or {}).get("artifacts") or {}
+    block: dict[str, Any] = {
+        "run_dir": declared.get("run_dir"),
+        "trace": declared.get("trace"),
+        "private_trace": declared.get("private_trace"),
+        "failures": declared.get("failures"),
+        "summary": declared.get("summary"),
+        # Facts about a process that has not started. Filled by the runner, not guessed here.
+        "log": None,
+        "server_pid": None,
+    }
+    if block["run_dir"] is None:
+        block["run_dir"] = str(out_dir.relative_to(REPO_ROOT)) if out_dir.is_relative_to(REPO_ROOT) else str(out_dir)
+    return block
 
 
 def write_manifest(manifest: dict[str, Any], out_dir: Path, *, force: bool) -> tuple[Path, bool]:
@@ -802,6 +1361,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("-o", "--out", default=None, help="Run directory (default: results/raw/<run_id>/)")
     parser.add_argument("--force", action="store_true", help="Supersede an existing, differing manifest")
+    parser.add_argument(
+        "--execution-claim",
+        action="store_true",
+        help=(
+            "This manifest authorises a real rollout. A dirty tracked tree then becomes a "
+            "blocker (exit 2) instead of a warning, because the commit it names would not "
+            "contain the code that ran. Without it the manifest is an inspection report: "
+            "written for a reader, never accepted by the launcher."
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="Print the manifest to stdout")
     parser.add_argument(
         "--finish",
@@ -847,7 +1416,38 @@ def main(argv: list[str] | None = None) -> int:
         output_checkpoint=args.output_checkpoint,
         note=args.note,
         eval_config=args.eval_config,
+        out_dir=out_dir,
+        execution_claim=args.execution_claim,
     )
+
+    # Executability is decided *before* anything touches the filesystem.
+    #
+    # Policy A: validate first, write nothing when the run could not start. Two reasons this
+    # beats writing a `preflight_failed` manifest and exiting 2 anyway. (1) A manifest on
+    # disk is read later by people and by `--finish`, and one that exists but describes an
+    # unstartable run is a trap: the run directory looks prepared. (2) It keeps the invariant
+    # that took the Phase 6I preflight down - `outcome.status: planned` must never appear on
+    # a run that cannot start - true by construction rather than by remembering to special-case
+    # it. Nothing is superseded, nothing needs --force, and a failed preflight leaves the
+    # directory exactly as it was.
+    executable = executable_report(manifest)
+    # Recorded even on success (as `[]`) so the launcher can distinguish "nothing was
+    # blocking" from "this manifest predates the field" without guessing.
+    manifest["execution_blockers"] = list(executable["blockers"])
+    if not executable["ok"]:
+        print(f"refusing: {executable['reason']}", file=sys.stderr)
+        for blocker in executable["blockers"]:
+            print(f"  BLOCKER: {blocker}", file=sys.stderr)
+        for warning in executable["warnings"]:
+            print(f"  warning: {warning['field']} - {warning['reason']}", file=sys.stderr)
+        for item in executable["not_applicable"]:
+            print(f"  not applicable: {item['field']} - {item['reason']}", file=sys.stderr)
+        print(
+            f"refusing: nothing was written to {target}. Fix the config and re-run; "
+            "there is no --force that makes an unstartable run startable.",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         path, wrote = write_manifest(manifest, out_dir, force=args.force)
@@ -856,12 +1456,28 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(("wrote " if wrote else "already present ") + str(path))
-    if manifest["unresolved"]:
-        print(f"  unresolved ({len(manifest['unresolved'])}): " + ", ".join(manifest["unresolved"]))
+    # Stated in both directions: a reader must not have to infer the claim from which flags
+    # were passed, and `no_execution_claim: true` is the sentence that stops someone
+    # treating an inspection report as a licence to start a run.
+    if manifest["execution_claim"]:
+        print(f"  executable: {str(executable['ok']).lower()} ({executable['status']})")
+        print("  execution_claim: true (a launcher may act on this manifest)")
+    else:
+        print("  executable: false")
+        print("  no_execution_claim: true (inspection only; the rollout launcher will refuse this)")
+    if executable["blockers"]:
+        out = sys.stderr
+        for blocker in executable["blockers"]:
+            print(f"  BLOCKER: {blocker}", file=out)
+    for warning in executable["warnings"]:
+        print(f"  warning: {warning['field']} - {warning['reason']}")
+    for item in executable["not_applicable"]:
+        print(f"  not applicable: {item['field']}")
+    untracked = manifest.get("git", {}).get("untracked") or []
+    if untracked:
+        print(f"  untracked (not ignored, {len(untracked)}): " + ", ".join(sorted(untracked)))
     if not manifest["gpu"]["present"]:
         print("  note: no GPU detected on this machine (normal off the training box)")
-    if manifest["git"]["dirty"]:
-        print("  WARNING: working tree was dirty; this manifest names a commit that does not contain the code that ran")
     if args.json:
         print(json.dumps(manifest, indent=2))
     return 0

@@ -424,7 +424,7 @@ def test_manifest_tasks_stay_null_because_neither_file_names_a_task() -> None:
     """A null `tasks` is a visible gap, not a default - and it must stay visible."""
     manifest = _manifest()
     assert manifest["effective"]["tasks"] is None
-    assert manifest["pilot"]["tasks"] is None
+    assert manifest["pilot"]["values"]["tasks"] is None
 
 
 def test_manifest_records_three_hashes_and_per_field_provenance() -> None:
@@ -444,8 +444,8 @@ def test_manifest_records_three_hashes_and_per_field_provenance() -> None:
 def test_manifest_still_names_the_overlay_so_its_defaults_cannot_masquerade() -> None:
     """The `pilot` block keeps the file's own values whatever the arm resolved to."""
     manifest = _manifest()
-    assert manifest["pilot"]["rollouts_per_task"] == 8
-    assert manifest["pilot"]["tasks"] is None
+    assert manifest["pilot"]["values"]["rollouts_per_task"] == 8
+    assert manifest["pilot"]["values"]["tasks"] is None
     assert manifest["pilot"]["applies"] is True
     # `effective` is the merged document, and the merge is not the identity.
     assert manifest["effective"]["hashes"]["merged"]["sha256"]
@@ -555,7 +555,14 @@ def test_executed_block_reads_the_settings_the_collector_will_actually_load() ->
             "min_distinct_rewards": 2,
             "diagnostic_only": True,
         },
-        "output": {"run_id": "phase6f_unit_probe"},
+        "output": {
+            "run_id": "phase6f_unit_probe",
+            # The collector opens these three by name (`output_path("rollouts")` etc.), so a
+            # config without them is not runnable and `materialised` says so.
+            "rollouts": "results/raw/phase6f_unit_probe/rollouts.jsonl",
+            "private": "results/raw/phase6f_unit_probe/rollouts_private.jsonl",
+            "failures": "results/raw/phase6f_unit_probe/failures.jsonl",
+        },
         "tasks": {"split": "train", "heldout_enabled": False},
         "reward": {"live": "reward_v1", "analysed": "reward_v2", "reward_v2_computed_inline": False},
         "server": {"cuda_visible_devices": "0", "served_model_name": "Qwen/Qwen2.5-Coder-1.5B-Instruct"},

@@ -233,19 +233,36 @@ def test_the_pilot_arm_records_that_it_updates_nothing(rm: Any) -> None:
     """The pilot's defining property is the absence of an update, so it is recorded."""
     pilot = _base(rm, arm="pilot")["pilot"]
     assert pilot["performs_parameter_update"] is False
-    assert pilot["training_iterations"] == 0
-    assert pilot["optimizer_enabled"] is False
-    assert pilot["expect_output_checkpoint"] is False
+    assert pilot["values"]["training_iterations"] == 0
+    assert pilot["values"]["optimizer_enabled"] is False
+    assert pilot["values"]["expect_output_checkpoint"] is False
 
 
 def test_the_pilot_arm_records_its_rollout_shape_and_reward_split(rm: Any) -> None:
     """Rollout count, concurrency and the offline-only reward are what the pilot measures."""
     pilot = _base(rm, arm="pilot")["pilot"]
-    assert pilot["rollouts_per_task"] is not None
-    assert pilot["concurrency"] == 1, "the pilot is serial by design"
-    assert pilot["heldout_enabled"] is False
-    assert pilot["reward_v2_computed_inline"] is False
+    assert pilot["values"]["rollouts_per_task"] is not None
+    assert pilot["values"]["concurrency"] == 1, "the pilot is serial by design"
+    assert pilot["values"]["heldout_enabled"] is False
+    assert pilot["values"]["reward_v2_computed_inline"] is False
     assert pilot["formal_protocol"] == rm.PROTOCOL_CONFIG
+
+
+def test_pilot_values_are_labelled_as_overlay_values_not_the_executed_identity(
+    rm: Any,
+) -> None:
+    """`pilot.values` mirrors the committed overlay, which is not what a run executes.
+
+    `pilot_rollouts_1p5b.yaml` ships `rollouts.tasks: null` on purpose. That placeholder is
+    an overlay value; a materialised eval run never reads that file. Flattening it into the
+    pilot block made it look like a property of the run, so the block says where the values
+    came from and where the authoritative identity lives.
+    """
+    pilot = _base(rm, arm="pilot")["pilot"]
+    assert pilot["values_from"] == "overlay_file"
+    assert "executed.settings" in pilot["values_note"]
+    assert pilot["values"]["tasks"] is None, "the overlay placeholder, recorded as such"
+    assert "settings" in pilot["values_note"]
 
 
 def test_only_the_pilot_arm_carries_a_pilot_block(rm: Any) -> None:
@@ -258,7 +275,8 @@ def test_only_the_pilot_arm_carries_a_pilot_block(rm: Any) -> None:
         block = _base(rm, arm=arm)["pilot"]
         assert block["applies"] is False
         assert block["name"] is None
-        assert block["training_iterations"] is None
+        # Still shaped like the pilot block, with every value withheld rather than absent.
+        assert block["values"]["training_iterations"] is None
 
 
 def test_the_pilot_arm_cannot_open_the_heldout_seal(rm: Any) -> None:
