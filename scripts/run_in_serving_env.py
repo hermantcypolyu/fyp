@@ -47,6 +47,13 @@ Usage of the gate
     # the manifest is derived from the script being launched
     python scripts/run_in_serving_env.py scripts/collect_baseline_rollouts.py -- --manifest results/raw/<run>/manifest.json
 
+`--manifest` belongs to the launcher, not to the script being launched. It is read for
+authorisation and then removed, together with the `--` separator, so the target only ever
+sees arguments it declares itself. In the example above the collector receives an empty
+argument list, not `--manifest ...`; the collectors use a strict argparse and would abort on
+an option they do not define. The same applies to `--manifest=PATH`. Naming the manifest
+twice, or giving it no value or an empty one, is a usage error.
+
 Exit codes: 0 the script ran / 2 usage / 3 environment check failed / 4 interpreter not
 found / 5 the manifest does not authorise a run.
 """
@@ -124,6 +131,69 @@ def _check_environment(python: Path, repo_root: Path) -> tuple[bool, dict]:
         return False, {"error": f"probe produced no parseable output: {proc.stdout!r}"}
 
 
+class ManifestArgumentError(ValueError):
+    """A launcher argument is malformed, so nothing should be started."""
+
+
+def _split_manifest_args(extra: list[str]) -> tuple[str | None, list[str]]:
+    """Split the target arguments into (manifest path, arguments for the target).
+
+    `--manifest` authorises *this launcher*. It is not an option of the script being
+    launched, and the collectors parse their arguments strictly, so forwarding it unchanged
+    makes the documented invocation fail inside the target's argparse before anything runs:
+
+        python scripts/run_in_serving_env.py scripts/collect_baseline_rollouts.py -- \\
+            --manifest results/raw/<run>/manifest.json --config ... --dry-run
+        -> collect_baseline_rollouts.py: error: unrecognized arguments: -- --manifest ...
+
+    The separator `--` is stripped for the same reason. It exists to stop the launcher's own
+    parser from consuming target options; once the manifest has been taken out there is no
+    launcher parser left to protect, and the target has never accepted a bare `--`.
+
+    Both `--manifest PATH` and `--manifest=PATH` are understood. A repeated, valueless or
+    empty manifest is rejected rather than resolved, because guessing which of two
+    authorisations was meant is exactly the ambiguity the gate exists to remove. The caller's
+    list is never mutated.
+    """
+    manifest: str | None = None
+    forwarded: list[str] = []
+    seen = False
+    index = 0
+    while index < len(extra):
+        token = extra[index]
+
+        if token == "--manifest":
+            if seen:
+                raise ManifestArgumentError("--manifest was given more than once; name exactly one manifest")
+            if index + 1 >= len(extra):
+                raise ManifestArgumentError("--manifest needs a path after it")
+            value = extra[index + 1]
+            if not value.strip():
+                raise ManifestArgumentError("--manifest was given an empty path")
+            manifest, seen = value, True
+            index += 2
+            continue
+
+        if token.startswith("--manifest="):
+            if seen:
+                raise ManifestArgumentError("--manifest was given more than once; name exactly one manifest")
+            value = token.split("=", 1)[1]
+            if not value.strip():
+                raise ManifestArgumentError("--manifest was given an empty path")
+            manifest, seen = value, True
+            index += 1
+            continue
+
+        if token == "--":
+            index += 1
+            continue
+
+        forwarded.append(token)
+        index += 1
+
+    return manifest, forwarded
+
+
 def _manifest_from_args(extra: list[str]) -> str | None:
     """The manifest this launch is authorised by, if one was named.
 
@@ -131,12 +201,8 @@ def _manifest_from_args(extra: list[str]) -> str | None:
     that is where the GPU scripts already expect to find their run configuration. Absent is
     not an error here - `_require_manifest()` decides whether that matters.
     """
-    for index, token in enumerate(extra):
-        if token == "--manifest" and index + 1 < len(extra):
-            return extra[index + 1]
-        if token.startswith("--manifest="):
-            return token.split("=", 1)[1]
-    return None
+    manifest, _ = _split_manifest_args(extra)
+    return manifest
 
 
 def _require_manifest(manifest_path: str | None) -> int | None:
@@ -187,6 +253,10 @@ def main(argv: list[str] | None = None) -> int:
         print(__doc__)
         return 0 if argv else 2
 
+    if argv[0] == "--":
+        print("ERROR: no target script was named before `--`.", file=sys.stderr)
+        return 2
+
     script, extra = argv[0], argv[1:]
     script_path = Path(script)
     if not script_path.exists():
@@ -196,10 +266,18 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         script_path = candidate
 
+    # Split before authorising: a malformed `--manifest` is a usage error, and it must be
+    # reported as one rather than silently sent to the target.
+    try:
+        manifest_path, target_args = _split_manifest_args(extra)
+    except ManifestArgumentError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
     # The authorisation check runs before the interpreter and the environment probe. Both of
     # those are cheap, but neither is free, and a launch that was never going to be allowed
     # should fail on the reason that matters rather than on a missing venv.
-    refusal = _require_manifest(_manifest_from_args(extra))
+    refusal = _require_manifest(manifest_path)
     if refusal is not None:
         return refusal
 
@@ -242,7 +320,9 @@ def main(argv: list[str] | None = None) -> int:
         f"[run_in_serving_env] {versions}",
         file=sys.stderr,
     )
-    return subprocess.call([str(python), str(script_path), *extra], env=env)
+    # `target_args` carries no launcher-only argument. The target owns everything here and
+    # sees it in the order it was written.
+    return subprocess.call([str(python), str(script_path), *target_args], env=env)
 
 
 if __name__ == "__main__":
