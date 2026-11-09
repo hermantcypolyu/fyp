@@ -1,0 +1,77 @@
+# Phase 6K - workflow-procedure remediation comparison. PREPARED, NOT EXECUTED.
+#
+# ############################################################################
+# ##  STATUS: DIAGNOSTIC ONLY. Not a baseline. Not training evidence.       ##
+# ############################################################################
+#
+# The third and last controlled comparison of the behavioural-remediation series,
+# and the last planned experiment before a model-size or task-design decision.
+#
+#   Phase 6I  baseline prompt        -> 4/4 scored -1.0, 20 file-not-found calls
+#   Phase 6J  + workspace paths      -> 4/4 scored -1.0, 0 file-not-found calls
+#   Phase 6K  + working procedure    -> this run
+#
+# Phase 6J proved the navigation defect was real and was fixed: 20 failing calls
+# became 16 correct ones, and no rollout repeated an identical failing call. The
+# reward still did not move, because the residual failure is a different one -
+# the model reads the file and then stops. Neither scoring rollout edited,
+# neither ran the tests, neither submitted.
+#
+# Two levers change against Phase 6J, and only these two:
+#
+#   1. `compact_messages` in `analysis/context_budget.py` now enforces a hard
+#      post-compaction token limit. It previously took `tokenizer` and `budget`
+#      and used neither, so a conversation under the character cap came back
+#      unchanged while the request exceeded the context window. The Phase 6J
+#      rollout that breached at turn 7 with 8154 prompt tokens is the evidence
+#      that this was reachable in practice, not only in theory.
+#
+#   2. `WORKFLOW_GUIDANCE` in `scripts/collect_baseline_rollouts.py` names
+#      read -> edit -> run_tests -> submit and states that reading alone is not
+#      progress. It reveals no correct code, no hidden test and no reference
+#      solution, and the harness still performs no edit, test run or submission
+#      on the model's behalf.
+#
+# Everything else is inherited unchanged from `configs/eval/baseline_phase6.yaml`
+# and restated below so this file records the values the comparison depends on.
+# If any of them drift, a Phase 6K/6J difference stops being attributable to
+# these two levers.
+#
+# The only intentional difference from Phase 6J's overlay is `output.*`: a new
+# run ID, so this run cannot overwrite or be confused with the Phase 6I or 6J
+# evidence directories. `materialise_eval_config.py` merges exactly one level,
+# so every output key is set here explicitly.
+#
+# `sampling.seed` stays 42. It is not the seed the requests carry; it is the base
+# seed the four per-rollout seeds are derived from, and they must be identical to
+# Phase 6I and 6J or the comparison is confounded:
+#
+#     r00 -> 184288048   r01 -> 3168762815   r02 -> 475852200   r03 -> 1693580453
+#
+# which are `plan_seeds(42, ["bugfix_offbyone_pagination"], 4)`.
+
+extends: configs/eval/baseline_phase6.yaml
+
+output:
+  run_id: phase6k_bugfix_offbyone_pagination_20261109T100011Z
+  rollouts: results/raw/phase6k_bugfix_offbyone_pagination_20261109T100011Z/rollouts.jsonl
+  failures: results/raw/phase6k_bugfix_offbyone_pagination_20261109T100011Z/rollouts_failures.jsonl
+  private: results/raw/phase6k_bugfix_offbyone_pagination_20261109T100011Z/rollouts_private.jsonl
+  analysis: results/analysis/phase6k_bugfix_offbyone_pagination_20261109T100011Z.json
+
+sampling:
+  # Restated so this overlay records the values the comparison depends on.
+  # Unchanged from Phase 6E, 6G, 6H, 6I and 6J.
+  seed: 42
+  seed_policy: per_rollout
+  seed_derivation: sha256_u32_v1
+
+run:
+  # The same single approved training-split task as Phase 6I and 6J. Not held-out.
+  task_subset:
+    - bugfix_offbyone_pagination
+  rollouts_per_task: 4
+  min_valid_rollouts: 4
+  # Non-training evidence, and a veto: this run can never be accepted as a
+  # baseline however well it scores.
+  diagnostic_only: true
