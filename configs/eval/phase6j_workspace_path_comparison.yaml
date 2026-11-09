@@ -1,0 +1,61 @@
+# Phase 6J - workspace-path remediation comparison. PREPARED, NOT EXECUTED.
+#
+# ############################################################################
+# ##  STATUS: DIAGNOSTIC ONLY. Not a baseline. Not training evidence.       ##
+# ############################################################################
+#
+# The controlled A/B partner to Phase 6I. Phase 6I ran four infrastructure-valid
+# rollouts of `bugfix_offbyone_pagination` and all four scored -1.0, because the
+# model addressed files as `src/pagination.py` while the sandbox only resolves
+# paths under `repo/`. Recorded there: 20 file-not-found calls, 25 repeated
+# identical failing calls, 0 successful edits, 0 `run_tests` calls.
+#
+# One lever changes against Phase 6I: `_system_prompt` in
+# `scripts/collect_baseline_rollouts.py` now appends a workspace-path block
+# naming the root, and its worked example uses `repo/src/pagination.py` instead
+# of the unprefixed `src/app.py` that taught the failing shape. See
+# docs/PHASE6J_WORKSPACE_PATH_EXPERIMENT.md.
+#
+# Everything else is inherited unchanged from `configs/eval/baseline_phase6.yaml`
+# and restated below so this file records the values the comparison depends on.
+# If any of them drift, a Phase 6J/6I difference stops being attributable to the
+# prompt alone.
+#
+# The only intentional difference from Phase 6I's overlay is `output.*`: a new
+# run ID, so this run cannot overwrite or be confused with the Phase 6I evidence
+# directory. `materialise_eval_config.py` merges exactly one level, so every
+# output key is set here explicitly.
+#
+# `sampling.seed` stays 42. It is not the seed the requests carry; it is the base
+# seed the four per-rollout seeds are derived from, and they must be identical to
+# Phase 6I or the comparison is confounded:
+#
+#     r00 -> 184288048   r01 -> 3168762815   r02 -> 475852200   r03 -> 1693580453
+#
+# which are `plan_seeds(42, ["bugfix_offbyone_pagination"], 4)`.
+
+extends: configs/eval/baseline_phase6.yaml
+
+output:
+  run_id: phase6j_bugfix_offbyone_pagination_20261109T090714Z
+  rollouts: results/raw/phase6j_bugfix_offbyone_pagination_20261109T090714Z/rollouts.jsonl
+  failures: results/raw/phase6j_bugfix_offbyone_pagination_20261109T090714Z/rollouts_failures.jsonl
+  private: results/raw/phase6j_bugfix_offbyone_pagination_20261109T090714Z/rollouts_private.jsonl
+  analysis: results/analysis/phase6j_bugfix_offbyone_pagination_20261109T090714Z.json
+
+sampling:
+  # Restated from the base config so this overlay records the values the
+  # comparison depends on. Unchanged from Phase 6E, 6G, 6H and 6I.
+  seed: 42
+  seed_policy: per_rollout
+  seed_derivation: sha256_u32_v1
+
+run:
+  # The same single approved training-split task as Phase 6I. Not held-out.
+  task_subset:
+    - bugfix_offbyone_pagination
+  rollouts_per_task: 4
+  min_valid_rollouts: 4
+  # Non-training evidence, and a veto: this run can never be accepted as a
+  # baseline however well it scores.
+  diagnostic_only: true
