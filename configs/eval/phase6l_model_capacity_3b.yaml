@@ -1,0 +1,90 @@
+# Phase 6L — model-capacity diagnostic: Qwen2.5-Coder-3B against the Phase 6K result.
+#
+# Why this arm exists. Phase 6I, 6J and 6K each changed one harness lever and each was
+# implemented correctly, and none of them moved the reward:
+#
+#   6I control            20 file-not-found, 7 edits, 0 run_tests, 1 empty submission
+#   6J workspace paths    not-found 20 -> 0, correct paths 0 -> 16, still 0 run_tests
+#   6K workflow + budget  infra-invalid 1 -> 0, overflow 1 -> 0, 0 run_tests, 0 submissions
+#
+# Phase 6K concluded that the harness is no longer the limiting factor and that the binding
+# constraint is either model capacity or task design. This arm tests capacity and nothing else.
+#
+# The one intentional variable is model size: 1.5B -> 3B. Everything the harness decides is
+# inherited from `configs/eval/baseline_phase6.yaml` unchanged, and everything Phase 6K pinned
+# in its overlay is restated here so that the comparison does not depend on the 6K overlay file
+# still existing in its present form.
+#
+# Deliberately absent, per the Phase 6K conclusion:
+#   * no prompt edit (WORKFLOW_GUIDANCE and WORKSPACE_PATH_GUIDANCE are unchanged in code, and
+#     this overlay cannot reach them because neither is a config key);
+#   * no reward change, no verifier change, no task change, no seed change;
+#   * no LoRA adapter, no optimizer, no training of any kind. The collector never trains.
+#
+# GPU. `docs/PHASE5_GPU_RESOURCE_RULES.md` rule 1 designates GPU 0 as this project's card and
+# rule 3 forbids moving to GPU 1 when GPU 0 is busy. Both rules are overridden here for one run
+# with the operator's explicit authorisation, because at materialisation time physical GPU 0 was
+# held by another user's process (45 GB, 100 % utilisation, PID recorded in the run manifest) and
+# the alternative was not to run the experiment at all. The override is recorded rather than
+# hidden: `server.cuda_visible_devices` below is the *physical* index, and the manifests and this
+# comment are the provenance. No foreign process was signalled or modified. On a future run where
+# GPU 0 is free, delete this override and this paragraph.
+#
+# Phase 6L is a diagnostic arm. It is not a Phase 6 sub-phase in the remediation series (that
+# series closed in 6K), it produces no training evidence, and it does not start Phase 7.
+
+extends: configs/eval/baseline_phase6.yaml
+
+meta:
+  name: phase6l_model_capacity_3b
+  phase: "6L"
+  status: DIAGNOSTIC
+  role: capacity comparison arm (3B), paired against the Phase 6K 1.5B result
+  written: 2026-11-09
+
+model:
+  # The one intentional variable. Same family, same instruct tuning, same tokenizer family —
+  # a different parameter count is the only thing that differs.
+  name: Qwen/Qwen2.5-Coder-3B-Instruct
+  # A repo name alone resolves to whatever is current, which is invisible irreproducibility.
+  # This is the commit sha of the cached snapshot, the same discipline as the 1.5B pin.
+  revision: 488639f1ff808d1d3d0ba301aef8c11461451ec5
+  adapter: null            # still the base model: no LoRA, so no checkpoint_id on any row
+  load_in_4bit: false      # BF16 for the same reason as the control arm: quantisation would
+                           # change the weights and measure quantisation, not model size.
+  dtype: bfloat16
+  max_seq_length: 8192     # unchanged; the two arms must see the same context window
+
+# --------------------------------------------------------------------- unchanged by design
+# Restated rather than relied on, so a future edit to the baseline cannot silently drift this
+# comparison. Tests assert each of these against the 1.5B arm.
+sampling:
+  temperature: 1.0
+  top_p: 1.0
+  seed: 42
+  seed_policy: per_rollout
+  seed_derivation: sha256_u32_v1
+
+run:
+  task_subset:
+    - bugfix_offbyone_pagination
+  rollouts_per_task: 4
+  min_valid_rollouts: 4
+  # A diagnostic arm is never training evidence. This is a veto in `_assess_validity`, not a
+  # label: it makes acceptance unattainable by construction, which is the intent here.
+  diagnostic_only: true
+
+# `reward.live` / `reward.analysed` are NOT restated: the baseline already pins v1 live and v2
+# analysed, and a diagnostic arm has no reason to touch either. Restating them as `v1` / `v2`
+# would have silently overwritten the base's `reward_v1` / `reward_v2` strings with different
+# ones, which is a defect this file avoids by omission.
+
+server:
+  base_url: http://127.0.0.1:8010/v1
+  served_model_name: Qwen/Qwen2.5-Coder-3B-Instruct
+  cuda_visible_devices: "1"   # OVERRIDDEN for this run only; see the header. Physical GPU 1.
+  gpu_memory_utilization: 0.4
+
+# No `optimizer` block: the eval config schema has no such key, and the collector never trains.
+# "No optimizer runs" is guaranteed by the collector's code path, not by a config flag, so a
+# flag here would be decoration that reads like a control.
