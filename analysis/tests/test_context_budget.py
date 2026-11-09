@@ -507,3 +507,133 @@ def test_config_declares_a_minimum_valid_rollout_count() -> None:
     config = yaml.safe_load((REPO / "configs" / "eval" / "baseline_phase6.yaml").read_text(encoding="utf-8"))
     assert config["run"]["min_valid_rollouts"] > 0
     assert config["run"]["min_valid_rollouts"] <= len(config["run"]["task_subset"])
+
+
+# ------------------------------------- 21-26: the post-compaction token limit
+
+
+def test_compaction_enforces_a_hard_token_limit() -> None:
+    """21. Compaction is bounded by tokens, not only by characters.
+
+    This is the Phase 6J defect in one assertion. `compact_messages` used to accept
+    `tokenizer` and `budget` and use neither, so a conversation that was under the
+    character cap came back byte-identical while the request still exceeded the
+    context window. Twenty turns of unbroken prose - exactly what the 6J rollout that
+    breached the window looked like - compacted to `compacted: False`.
+    """
+    tokenizer = FakeTokenizer()
+    budget = ContextBudget(max_model_len=400, reserved_completion_tokens=50, safety_margin_tokens=10)
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+    for i in range(20):
+        messages.append({"role": "assistant", "content": " ".join(f"p{i}_{j}" for j in range(120))})
+
+    assert preflight(messages, tokenizer, budget).status == STATUS_EXCEEDED
+
+    result = compact_messages(messages, policy=CompactionPolicy(), tokenizer=tokenizer, budget=budget)
+    assert result.within_budget is True
+    assert measure(result.messages, tokenizer) <= budget.capacity
+
+
+def test_compaction_reports_no_verdict_without_a_budget() -> None:
+    """22. Without a tokenizer and budget compaction is character-only and says so."""
+    tokenizer = FakeTokenizer()
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+    for i in range(5):
+        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": "z" * 400})
+
+    result = compact_messages(messages, policy=CompactionPolicy(observation_char_cap=50), tokenizer=tokenizer)
+    assert result.within_budget is None
+    assert result.prompt_tokens is None
+
+
+def test_compaction_ladder_terminates_and_fits_tool_heavy_input() -> None:
+    """23. A tool-heavy conversation that fits is compacted, and the loop stops."""
+    tokenizer = FakeTokenizer()
+    budget = ContextBudget(max_model_len=2000, reserved_completion_tokens=100, safety_margin_tokens=10)
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+    for i in range(12):
+        messages.append(
+            {
+                "role": "assistant",
+                "content": " ".join(["a"] * 40),
+                "tool_calls": [{"id": f"c{i}", "function": {"name": "read_file", "arguments": "{}"}}],
+            }
+        )
+        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": " ".join(["o"] * 300)})
+
+    result = compact_messages(messages, policy=CompactionPolicy(), tokenizer=tokenizer, budget=budget)
+    assert result.within_budget is True
+    assert measure(result.messages, tokenizer) <= budget.capacity
+    # The ladder is finite: it must report a pass count rather than loop forever.
+    assert 1 <= result.passes <= 12
+
+
+def test_compaction_never_orphans_a_tool_call_while_compacting() -> None:
+    """24. The token-aware ladder must not break id pairing to reach the budget."""
+    tokenizer = FakeTokenizer()
+    budget = ContextBudget(max_model_len=1200, reserved_completion_tokens=100, safety_margin_tokens=10)
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+    for i in range(10):
+        messages.append(
+            {
+                "role": "assistant",
+                "content": " ".join(["a"] * 30),
+                "tool_calls": [{"id": f"c{i}", "function": {"name": "read_file", "arguments": "{}"}}],
+            }
+        )
+        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": " ".join(["o"] * 250)})
+
+    result = compact_messages(messages, policy=CompactionPolicy(), tokenizer=tokenizer, budget=budget)
+    call_ids = [
+        call["id"]
+        for message in result.messages
+        if message.get("role") == "assistant"
+        for call in (message.get("tool_calls") or [])
+    ]
+    reply_ids = [m.get("tool_call_id") for m in result.messages if m.get("role") == "tool"]
+    assert call_ids == reply_ids, "every assistant tool_call keeps its reply, in order"
+    assert result.messages[0]["content"] == "s"
+    assert result.messages[1]["content"] == "u"
+
+
+def test_compaction_compresses_prose_attached_to_a_tool_call() -> None:
+    """25. Commentary before a tool call is compressible; the call itself is not.
+
+    An assistant turn that narrates at length and then calls a tool was previously
+    exempt from every rung of the ladder, because the message carried `tool_calls`.
+    A model that narrated before each read kept its whole transcript.
+    """
+    tokenizer = FakeTokenizer()
+    budget = ContextBudget(max_model_len=600, reserved_completion_tokens=100, safety_margin_tokens=10)
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+    for i in range(6):
+        messages.append(
+            {
+                "role": "assistant",
+                "content": " ".join(["n"] * 200),
+                "tool_calls": [{"id": f"c{i}", "function": {"name": "read_file", "arguments": "{}"}}],
+            }
+        )
+        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": " ".join(["o"] * 200)})
+
+    result = compact_messages(messages, policy=CompactionPolicy(), tokenizer=tokenizer, budget=budget)
+    assert result.within_budget is True
+    calls = [m for m in result.messages if m.get("role") == "assistant" and m.get("tool_calls")]
+    assert len(calls) == 6, "no tool call is dropped"
+    # The prose was reduced: at least one call message no longer carries 200 words.
+    assert any(len(str(m.get("content") or "").split()) < 200 for m in calls)
+
+
+def test_compaction_marks_an_unfittable_conversation_honestly() -> None:
+    """26. When the floor alone exceeds the budget the verdict is False, not a lie."""
+    tokenizer = FakeTokenizer()
+    budget = ContextBudget(max_model_len=40, reserved_completion_tokens=10, safety_margin_tokens=5)
+    messages = [
+        {"role": "system", "content": " ".join(["s"] * 40)},
+        {"role": "user", "content": " ".join(["u"] * 40)},
+    ]
+    result = compact_messages(messages, policy=CompactionPolicy(), tokenizer=tokenizer, budget=budget)
+    # system + instruction are preserved by contract, so no ladder rung can help.
+    assert result.within_budget is False
+    assert measure(result.messages, tokenizer) > budget.capacity
+    assert result.messages[0]["content"].startswith(" s s") or "s s s" in result.messages[0]["content"]

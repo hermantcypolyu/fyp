@@ -560,6 +560,21 @@ def _call_from_payload(payload: Any) -> list[tuple[str, dict[str, Any]]]:
 # ------------------------------------------------------------------- one rollout
 
 
+def _peak_probe(current: Probe, candidate: Probe) -> Probe:
+    """The probe with the larger measured prompt, for the rollout's peak telemetry.
+
+    A peak field that only ever holds the first turn is misleading: a rollout that grew to
+    8154 prompt tokens on turn 7 reported `peak_prompt_tokens: 703, status: ok`. `status`
+    follows the peak for the same reason - the question the field answers is "how close did
+    this rollout get to the wall", and the closest approach is the maximum.
+    """
+    current_tokens = current.prompt_tokens or 0
+    candidate_tokens = candidate.prompt_tokens or 0
+    if candidate_tokens > current_tokens:
+        return candidate
+    return current
+
+
 def _is_context_length_error(exc: BaseException) -> bool:
     """True when the server rejected a request for exceeding the context window.
 
@@ -623,6 +638,21 @@ If a file operation returns 'no such file', do not repeat the identical tool cal
 Inspect the available repository paths and correct the path."""
 
 
+WORKFLOW_GUIDANCE = """## Working procedure
+
+Work through these four phases in order. Do not stop after an earlier phase.
+
+1. **read** - read the code the task mentions before changing anything.
+2. **edit** - change the file with an editing tool. Describing a change is not
+   making one; the repository is only modified by a tool call.
+3. **run_tests** - run the test command yourself and read the result.
+4. **submit** - submit the completed change with the submit tool.
+
+Reading is not progress on its own. A submission is only useful after you have
+edited the code and run the tests. If the tests fail, return to step 2 and fix
+the failure before submitting."""
+
+
 def _system_prompt(cfg: BaselineConfig) -> str:
     """The configured system message with the tool catalogue appended as text.
 
@@ -638,6 +668,8 @@ def _system_prompt(cfg: BaselineConfig) -> str:
     )
     lines.append("")
     lines.append(WORKSPACE_PATH_GUIDANCE)
+    lines.append("")
+    lines.append(WORKFLOW_GUIDANCE)
     lines.append("")
     lines.append("Example - read the first 50 lines of a file:")
     lines.append('  {"name": "read_file", "arguments": {"path": "repo/src/pagination.py", "start": 1, "end": 50}}')
@@ -918,7 +950,9 @@ def run_one_rollout(
     result = None
     private_tool_log: list[dict[str, Any]] = []
     compaction_events = 0
+    compaction_attempts = 0
     first_probe: Probe | None = None
+    peak_probe: Probe | None = None
     infra: dict[str, Any] | None = None
 
     budget = cfg.context_budget()
@@ -969,13 +1003,29 @@ def run_one_rollout(
                 break
 
             if probe.status == STATUS_EXCEEDED:
-                # A later turn outgrew the window. Compact deterministically, re-measure,
-                # and only give up if compaction cannot make room.
+                # A later turn outgrew the window. Compact deterministically, then re-measure.
+                #
+                # `compact_messages` now enforces the token budget itself: it re-measures
+                # the compacted conversation and repeats until the prompt fits or it has
+                # nothing left to remove. It used to accept `budget` and `tokenizer` and
+                # ignore both, so a single character-bounded pass could leave the prompt
+                # well above the limit - which is exactly how one Phase 6J rollout was
+                # declared infrastructure-invalid while the message claimed the request
+                # "needs 8154 tokens" that nothing had tried to reduce.
                 compaction = compact_messages(messages, policy=compaction_policy, tokenizer=tokenizer, budget=budget)
                 if compaction.compacted:
                     messages = compaction.messages
                     compaction_events += 1
-                    probe = preflight(messages, tokenizer, budget)
+                # Credit the compaction on the run even when it changed nothing, so the
+                # summary can distinguish "never needed to compact" from "tried and failed".
+                compaction_attempts += 1
+                probe = preflight(messages, tokenizer, budget)
+                # Remember the tightest post-compaction measurement of the rollout. The
+                # public telemetry used to report the turn-0 probe only, so a rollout that
+                # breached the budget at turn 7 still advertised `peak_prompt_tokens: 703`
+                # and `status: ok`, which is the opposite of what a peak field promises.
+                if probe.prompt_tokens is not None:
+                    peak_probe = probe if peak_probe is None else _peak_probe(peak_probe, probe)
                 if probe.status != STATUS_OK:
                     infra = infrastructure_failure(
                         error_type="context_budget_exceeded",
@@ -1163,7 +1213,11 @@ def run_one_rollout(
     # It is safe to publish because it is counts only: which fields appear is fixed by
     # `Probe.to_dict`, and no prompt text, tool argument or observation can enter through
     # it. The private sidecar keeps the same record for continuity with Phase 6E.
-    row["context_budget"] = _public_context_telemetry(first_probe, compaction_events)
+    row["context_budget"] = _public_context_telemetry(
+        peak_probe or first_probe,
+        compaction_events,
+        compaction_attempts=compaction_attempts,
+    )
 
     return RolloutOutcome(
         row=row,
@@ -1532,7 +1586,12 @@ def _persist_evidence(
     return report
 
 
-def _public_context_telemetry(probe: Probe | None, compaction_events: int) -> dict[str, Any] | None:
+def _public_context_telemetry(
+    probe: Probe | None,
+    compaction_events: int,
+    *,
+    compaction_attempts: int | None = None,
+) -> dict[str, Any] | None:
     """The public, privacy-safe context-budget record for one rollout.
 
     Counts only, and the key set is exactly what `analysis/trace_schema.json` declares for
@@ -1552,10 +1611,15 @@ def _public_context_telemetry(probe: Probe | None, compaction_events: int) -> di
 
     Returns None when no probe ran (the rollout died before its first measurement). Null is
     the honest value: a zeroed record would claim a measurement of zero.
+
+    `compaction_attempts` counts how many times the loop tried to compact, including
+    attempts that changed nothing. It is reported separately from `compaction_events`
+    (attempts that actually removed content) because the pair distinguishes "never needed
+    to compact" from "compacted repeatedly and still could not fit".
     """
     if probe is None:
         return None
-    return {
+    record = {
         "max_model_len": probe.budget.max_model_len,
         "reserved_completion_tokens": probe.budget.reserved_completion_tokens,
         "safety_margin_tokens": probe.budget.safety_margin_tokens,
@@ -1565,6 +1629,9 @@ def _public_context_telemetry(probe: Probe | None, compaction_events: int) -> di
         "status": probe.status,
         "context_remaining_tokens": probe.remaining,
     }
+    if compaction_attempts is not None:
+        record["compaction_attempts"] = compaction_attempts
+    return record
 
 
 def _first_context_budget(rows: list[dict[str, Any]]) -> dict[str, Any] | None:

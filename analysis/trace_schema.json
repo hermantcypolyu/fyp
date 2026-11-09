@@ -85,7 +85,7 @@
         "peak_prompt_tokens": {
           "type": "integer",
           "minimum": 0,
-          "description": "Tokens in the largest prompt this rollout sent, as measured before the request left the process. 0 when the rollout failed before its first measurement."
+          "description": "Tokens in the largest prompt this rollout sent, as measured before the request left the process. 0 when the rollout failed before its first measurement. Every preflight measurement in the rollout is considered, including re-measurements after compaction, so a rollout that grew past the budget reports the breaching size rather than its turn-0 size."
         },
         "context_remaining_tokens": {
           "type": ["integer", "null"],
@@ -100,6 +100,11 @@
           "type": "integer",
           "minimum": 0,
           "description": "How many times old observations were elided to stay inside the window. A non-zero value is a measurement of prompt growth, not a defect."
+        },
+        "compaction_attempts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many times the loop invoked compaction, including attempts that removed nothing. Read alongside compaction_events to tell 'never needed to compact' from 'compacted repeatedly and still did not fit'. Additive and optional, so pre-existing rows stay valid."
         }
       }
     },

@@ -293,13 +293,18 @@ def _clip(text: str, cap_chars: int) -> str:
 class CompactionPolicy:
     """Deterministic knobs for :func:`compact_messages`.
 
-    `keep_recent_tool_messages` is the number of newest tool results kept verbatim. Older
-    ones are replaced by a fixed-shape metadata line. `observation_char_cap` bounds any
-    single retained observation.
+    `observation_char_cap` bounds any single retained message and is the *starting* bound:
+    when a `budget` and `tokenizer` are supplied, compaction halves it (never below
+    `min_char_cap`) until the prompt measures within budget. `keep_recent_tool_messages` is
+    the number of newest tool results kept verbatim; older ones are replaced by a
+    fixed-shape metadata line, and the retained count shrinks under pressure.
     """
 
     observation_char_cap: int = 2000
     keep_recent_tool_messages: int = 4
+    #: The smallest per-message character cap compaction will shrink to. Below this a
+    #: retained observation stops being useful, so compaction drops it entirely instead.
+    min_char_cap: int = 200
 
 
 @dataclass
@@ -310,6 +315,18 @@ class CompactionResult:
     chars_before: int
     chars_after: int
     reasons: list[str] = field(default_factory=list)
+    #: How many elision/clip passes ran. More than one means a single pass did not fit.
+    passes: int = 1
+    #: Whether the returned messages measure within `budget`. `None` when no tokenizer or
+    #: budget was supplied, so no claim is made either way.
+    within_budget: bool | None = None
+    #: The measured prompt tokens of the returned messages, when measurement was possible.
+    prompt_tokens: int | None = None
+
+
+def _content_chars(message: dict[str, Any]) -> int:
+    """Characters in a message's own content, ignoring tool-call arguments."""
+    return len(str(message.get("content") or ""))
 
 
 def compact_messages(
@@ -319,28 +336,45 @@ def compact_messages(
     tokenizer: Any = None,
     budget: ContextBudget | None = None,
 ) -> CompactionResult:
-    """Shrink a conversation deterministically, preserving what must survive.
+    """Shrink a conversation deterministically until it measures within `budget`.
+
+    **This function enforces a hard token limit.** When `tokenizer` and `budget` are both
+    supplied, the result is re-measured with :func:`measure` and the elision/clipping
+    passes repeat until the prompt fits or no further reduction is possible. The
+    `within_budget` field on the result reports which happened, so a caller can turn "did
+    not fit" into an infrastructure decision instead of discovering it at the server.
+
+    That loop is the fix for a real defect. This function used to take `budget` and
+    `tokenizer` and use neither: it clipped each message to a fixed character cap, ran
+    exactly one pass, and returned without ever measuring the outcome. A single pass can
+    leave a prompt far above the limit, because a character cap is not a token budget -
+    2000 characters of dense source can exceed 700 tokens - and because a model that
+    narrates without calling tools produces many messages that are each under the cap and
+    therefore each retained. The rollout then failed with
+    `stage: preflight_after_compaction` alleging the request "needs N tokens", even though
+    nothing in the compaction had attempted to enforce N.
 
     Preserved unconditionally:
       * the system message (harness rules and the JSON tool contract)
       * the task instruction (the first user turn)
       * every assistant message that emitted `tool_calls`, together with its tool replies,
         so ids stay paired
-      * the newest `policy.keep_recent_tool_messages` tool results, verbatim up to
-        `policy.observation_char_cap`
 
-    Replaced: older `tool` observations become a one-line metadata stub naming the tool
-    and the original size, with the content dropped. This is deterministic truncation,
-    not an LLM summary.
+    Reduced, in increasing order of severity across passes:
+      * older `tool` observations are elided to a one-line metadata stub, then the newest
+        ones are clipped, then the character cap itself is halved
+      * assistant prose turns without tool calls are clipped, then elided entirely
 
-    Assistant prose turns without tool calls are the Phase 6 growth source: they are
-    clipped to `policy.observation_char_cap` too, because a model that narrates for 500
-    tokens a turn with no tool call will otherwise exhaust the window on its own words.
+    Everything here is deterministic: same input and same tokenizer give the same output.
+    Nothing is summarised by a model and no tool call is removed from the transcript.
     """
     policy = policy or CompactionPolicy()
-    original = [dict(m) for m in messages]
-    reasons: list[str] = []
+    # The hard limit is only enforceable when both halves of the measurement exist. Without
+    # them this degrades to the old character-only behaviour, and says so, rather than
+    # silently claiming to have enforced a budget it never looked at.
+    enforce = tokenizer is not None and budget is not None
 
+    original = [dict(m) for m in messages]
     system_msgs = [m for m in original if m.get("role") == "system"]
     others = [m for m in original if m.get("role") != "system"]
 
@@ -348,55 +382,125 @@ def compact_messages(
     instruction = others[first_user_index] if first_user_index is not None else None
     tail = [m for i, m in enumerate(others) if i != first_user_index]
 
-    tool_positions = [i for i, m in enumerate(tail) if m.get("role") == "tool"]
-    keep_from = (
-        tool_positions[-policy.keep_recent_tool_messages]
-        if len(tool_positions) > policy.keep_recent_tool_messages
-        else None
-    )
+    before = sum(_content_chars(m) for m in original)
+    chars_before_all = before
 
-    rebuilt_tail: list[dict[str, Any]] = []
+    reasons: list[str] = []
     replaced = 0
-    for index, message in enumerate(tail):
-        role = message.get("role")
-        clipped = dict(message)
-        content = message.get("content")
-
-        if role == "tool":
-            text = "" if content is None else str(content)
-            is_recent = keep_from is not None and index >= keep_from
-            if not is_recent:
-                clipped["content"] = f"[tool output elided by context compaction: {len(text)} chars]"
-                replaced += 1
-            elif len(text) > policy.observation_char_cap:
-                kept = _clip(text, policy.observation_char_cap)
-                clipped["content"] = kept + f"\n[... {len(text) - len(kept)} chars truncated ...]"
-                replaced += 1
-        elif role == "assistant" and not message.get("tool_calls"):
-            text = "" if content is None else str(content)
-            if len(text) > policy.observation_char_cap:
-                kept = _clip(text, policy.observation_char_cap)
-                clipped["content"] = kept + f"\n[... {len(text) - len(kept)} chars truncated ...]"
-                replaced += 1
-        rebuilt_tail.append(clipped)
+    cap = policy.observation_char_cap
+    keep_recent = policy.keep_recent_tool_messages
+    elide_prose = False
+    passes = 0
+    #: Upper bound on passes. Each pass strictly lowers `cap` or `keep_recent` or turns on
+    #: prose elision, so this cannot spin; the bound exists so a pathological input still
+    #: terminates with `within_budget: False` instead of looping.
+    max_passes = 12
 
     result = list(system_msgs)
     if instruction is not None:
         result.append(instruction)
-    result.extend(rebuilt_tail)
 
-    before = sum(len(str(m.get("content") or "")) for m in original)
-    after = sum(len(str(m.get("content") or "")) for m in result)
+    while True:
+        tool_positions = [i for i, m in enumerate(tail) if m.get("role") == "tool"]
+        keep_from = tool_positions[-keep_recent:] if keep_recent > 0 and tool_positions else []
+        keep_set = set(keep_from)
+
+        rebuilt_tail: list[dict[str, Any]] = []
+        replaced = 0
+        for index, message in enumerate(tail):
+            role = message.get("role")
+            clipped = dict(message)
+            content = message.get("content")
+
+            if role == "tool":
+                text = "" if content is None else str(content)
+                if index not in keep_set:
+                    clipped["content"] = f"[tool output elided by context compaction: {len(text)} chars]"
+                    replaced += 1
+                elif len(text) > cap:
+                    kept = _clip(text, cap)
+                    clipped["content"] = kept + f"\n[... {len(text) - len(kept)} chars truncated ...]"
+                    replaced += 1
+            elif role == "assistant":
+                text = "" if content is None else str(content)
+                if message.get("tool_calls"):
+                    # Prose attached to a tool call is compressible even though the call
+                    # itself is not. The call must survive (its id is paired with the tool
+                    # reply, and dropping either side is a server-side 400), but the words
+                    # before it are the model's commentary and are bounded the same way as
+                    # a prose-only turn. Leaving this unclipped was a residual leak: a
+                    # model narrating 800 characters before every call kept ~10000 tokens
+                    # of prose that compaction could see and did not touch.
+                    if elide_prose:
+                        if text:
+                            clipped["content"] = f"[assistant message elided by context compaction: {len(text)} chars]"
+                            replaced += 1
+                    elif len(text) > cap:
+                        kept = _clip(text, cap)
+                        clipped["content"] = kept + f"\n[... {len(text) - len(kept)} chars truncated ...]"
+                        replaced += 1
+                else:
+                    text = "" if content is None else str(content)
+                    if elide_prose:
+                        if text:
+                            clipped["content"] = f"[assistant message elided by context compaction: {len(text)} chars]"
+                            replaced += 1
+                    elif len(text) > cap:
+                        kept = _clip(text, cap)
+                        clipped["content"] = kept + f"\n[... {len(text) - len(kept)} chars truncated ...]"
+                        replaced += 1
+            rebuilt_tail.append(clipped)
+
+        result = list(system_msgs)
+        if instruction is not None:
+            result.append(instruction)
+        result.extend(rebuilt_tail)
+        passes += 1
+
+        if not enforce:
+            break
+        if preflight(result, tokenizer, budget).admissible:
+            break
+        if passes >= max_passes:
+            break
+
+        # Escalate. Each branch tightens the knobs that a single pass left loose, in the
+        # order that loses the least information first: drop the oldest retained
+        # observation, then shrink the per-message cap, then drop prose entirely.
+        if keep_recent > 0:
+            keep_recent -= 1
+        elif cap > policy.min_char_cap:
+            cap = max(policy.min_char_cap, cap // 2)
+        elif not elide_prose:
+            elide_prose = True
+        else:
+            break
+
     if replaced:
         reasons.append(f"elided_or_clipped_{replaced}_message(s)")
+    if passes > 1:
+        reasons.append(f"compaction_passes_{passes}")
+
+    after = sum(_content_chars(m) for m in result)
+    within_budget: bool | None = None
+    prompt_tokens: int | None = None
+    if enforce:
+        probe = preflight(result, tokenizer, budget)
+        prompt_tokens = probe.prompt_tokens
+        within_budget = probe.admissible
+        if not within_budget:
+            reasons.append("could_not_fit_budget")
 
     return CompactionResult(
         messages=result,
-        compacted=bool(replaced) and after < before,
+        compacted=bool(replaced) and after < chars_before_all,
         replaced_observations=replaced,
-        chars_before=before,
+        chars_before=chars_before_all,
         chars_after=after,
         reasons=reasons,
+        passes=passes,
+        within_budget=within_budget,
+        prompt_tokens=prompt_tokens,
     )
 
 
