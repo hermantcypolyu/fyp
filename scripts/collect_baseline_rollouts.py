@@ -1123,26 +1123,27 @@ def run_one_rollout(
         row["termination_reason"] = "error"
     elif infra is not None:
         # An infrastructure-invalid attempt is not a scored episode. The verifier is never
-        # consulted, so there is no reward to report and none is invented: every numeric
-        # result field becomes null rather than 0.0, because 0.0 is a measurement.
+        # consulted, so no reward is invented.
+        #
+        # The numeric fields keep `build_row`'s zero placeholders rather than being nulled.
+        # Nulling them reads better in isolation, but `analysis/trace_schema.json` declares
+        # `result` as a required object whose six fields are typed (integers, plus
+        # `submitted` as boolean) and admits no null, so a nulled block made EVERY
+        # infrastructure-failure row fail validation at `_persist_evidence` - discarding
+        # the whole batch after the rollouts had already run. This is the same latent
+        # defect class as the nested `context_budget` above: the path is only reached when
+        # a rollout fails infrastructure-wise, which a clean run never does.
+        #
+        # Nothing downstream can mistake these zeros for a measurement, because the row
+        # says what it is twice over: `reward_eligible: false` inside the
+        # `infrastructure_failure` record, and `termination_reason: infrastructure_error`.
+        # `reward_eligible_rows` / `is_infrastructure_failure` filter on exactly those, so
+        # the zeros never enter a reward statistic or a GRPO group.
         row["termination_reason"] = "infrastructure_error"
         row["error"] = {
             "type": str(infra["error_type"]),
             "message": str(infra["message"]),
         }
-        empty_result = dict.fromkeys(
-            (
-                "floor_tests",
-                "pass_fraction",
-                "reward",
-                "submitted",
-                "tests_passed",
-                "tests_total",
-            ),
-            None,
-        )
-        empty_result["gates"] = []
-        row["result"] = empty_result
         row["infrastructure_failure"] = infra
     elif row["termination_reason"] != stopped_on and stopped_on in {
         "timeout",

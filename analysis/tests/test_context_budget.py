@@ -425,6 +425,61 @@ def test_schema_keeps_the_row_closed() -> None:
     assert schema["additionalProperties"] is False
 
 
+def test_infrastructure_row_persists_with_zero_result_fields() -> None:
+    """17b. A persisted infrastructure-failure row must survive `validate_row`.
+
+    Regression: the collector nulled every numeric field of `result` for an
+    infrastructure-invalid attempt - deliberate, since 0.0 is a measurement - but the
+    schema types those fields non-null and `result` is required, so `write_jsonl` raised
+    and the whole batch was discarded after the rollouts had already run. Latent for the
+    same reason as the nested `context_budget` defect: nothing wrote such a row until a
+    rollout actually failed infrastructure-wise.
+
+    The base row comes from `build_row` rather than from a hand-written dict, so this
+    asserts the shape that really reaches `write_jsonl` instead of a fixture written to
+    match the schema it is checked against.
+    """
+    from analysis.trace import Timer, build_row, validate_row
+    from benchmark.tools.task_loader import TASKS_ROOT, load_task
+
+    task = load_task(TASKS_ROOT / "train" / "bugfix_metric_zero_domain_error")
+    healthy = build_row(
+        run_id="phase6j_fixture",
+        rollout_id="phase6j_fixture#0",
+        task=task,
+        result=None,  # a rollout that never graded: the zero placeholders are used
+        tool_calls=[],
+        timer=Timer.start(),
+        agent_kind="scripted_gold",
+        # A row with `result is None` must name why it failed, so the fixture carries one;
+        # it is replaced below with the infrastructure failure this test is about.
+        error=RuntimeError("harness fault before grading"),
+    )
+    validate_row(healthy)
+
+    # Apply the collector's infrastructure branch, as it now writes it.
+    row = dict(healthy)
+    row["termination_reason"] = "infrastructure_error"
+    row["error"] = {"type": "context_budget_exceeded", "message": "over"}
+    row["infrastructure_failure"] = infrastructure_failure(
+        error_type="context_budget_exceeded",
+        stage="preflight",
+        message="over",
+        probe=Probe(
+            prompt_tokens=7200,
+            budget=ContextBudget(max_model_len=8192, reserved_completion_tokens=1024, safety_margin_tokens=64),
+            status=STATUS_EXCEEDED,
+        ),
+    )
+    # The two defects this test pins: an untyped nested budget, and a null `result`.
+    validate_row(row)
+
+    assert row["infrastructure_failure"]["reward_eligible"] is False
+    assert row["result"]["floor_tests"] == 0
+    assert is_infrastructure_failure(row) is True
+    assert reward_eligible_rows([row]) == []
+
+
 # ------------------------------------------------------------ 19-20: config wiring
 
 
