@@ -269,3 +269,6 @@ CUDA_VISIBLE_DEVICES=1 .venv/bin/python scripts/run_in_serving_env.py \
 - **No 7B model was used, and no 7B run is recommended.** Model capacity is closed after a single
   1.5B → 3B comparison.
 - **Phase 7 was not started.**
+
+The downstream Phase 7 model-arm decision is recorded in
+[ADR-0008](decisions/0008-phase-7-uses-3b-not-1p5b.md).

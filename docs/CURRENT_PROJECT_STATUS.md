@@ -43,8 +43,10 @@ solvable by gold and failable without it, held-out seal `318fedc8868b` intact, a
   `reward_v1` is retained and is not deleted or overwritten.
 - **GRPO implementation audit** — determining whether the current training path implements the
   full GRPO objective or only a group-relative reward-weighted update.
-- **Phase 7 preparation** — preparing a small, controlled 1.5B GRPO + LoRA run after the reward
-  and GRPO checks are complete.
+- **Phase 7 preparation** — originally scoped as a small, controlled 1.5B GRPO + LoRA run after
+  the reward and GRPO checks are complete. **Superseded:** the 1.5B arm cannot form a GRPO
+  group, so Phase 7 now uses the 3B arm — see
+  [ADR-0008](decisions/0008-phase-7-uses-3b-not-1p5b.md).
 - **1.5B before-and-after evaluation** — protocol fixed and the bring-up batch
   `phase6_baseline_1p5b` (48 rows) was **collected and diagnosed**, but the batch is
   `baseline_valid: false`: it is diagnostic evidence only, is unsuitable as GRPO training
@@ -202,7 +204,7 @@ GRPO implementation audit
         |
 1.5B baseline
         |
-Phase 7: 1.5B GRPO + LoRA training
+Phase 7: 3B one-step GRPO + LoRA smoke   (originally planned on 1.5B; see ADR-0008)
         |
 Checkpoint reload
         |
@@ -233,6 +235,11 @@ for a small 2–5 iteration run. Start with a few training tasks, require reward
 each checkpoint, evaluate briefly after each iteration, and stop if loss, gradients, KL, validity,
 checkpoint reload, or data-isolation checks fail. The existing one-step F4 update remains an
 optimizer and plumbing validation, not evidence of multi-iteration RL improvement.
+
+> **Superseded.** This planning narrative predates Phase 6. The 1.5B closed loop is no longer
+> the plan: the 1.5B arm cannot form a GRPO group, and Phase 7 is approved for exactly **one**
+> optimizer step on the 3B arm only. See
+> [ADR-0008](decisions/0008-phase-7-uses-3b-not-1p5b.md).
 
 ---
 
@@ -649,8 +656,6 @@ identity.
 
 ### Phase 5 — Fixed experiment protocol
 
-
-
 **Status: protocol and manifest infrastructure implemented; rollout-only pilot configuration is pending task selection; formal NeMo RL training remains blocked by required-field and runtime parser validation.**
 
 Phase 5 did not launch a model, collect rollouts or update model parameters.
@@ -997,7 +1002,9 @@ and the held-out seal were green before execution. Full record:
   stdev 0.0 → 0.433, and one rollout submitted and scored `6/11` grading tests with no gates.
   First non-floor, non-empty submission in the whole series.
 - **Still not a training group.** 0 of 4 solved, 3 of 4 rows still `no_submit`, and the 0.0 row
-  was a partial fix on a binary pass/fail task. Phase 7 remains blocked.
+  was a partial fix on a binary pass/fail task. At the time of Phase 6 closure this left Phase 7
+  **blocked**; the group was later accepted for a single machinery-feasibility update only —
+  see [ADR-0008](decisions/0008-phase-7-uses-3b-not-1p5b.md).
 
 **Phase 6 closure — final status**
 
@@ -1009,62 +1016,186 @@ and the held-out seal were green before execution. Full record:
 | 4 | Workspace navigation remediation | **complete** |
 | 5 | Workflow-guidance remediation | **complete** |
 | 6 | Behavioural acceptance | **failed** |
-| 7 | Accepted training group | **unavailable** |
-| 8 | Phase 7 readiness | **blocked** |
+| 7 | Accepted training group | **unavailable at Phase 6 closure** |
+| 8 | Phase 7 readiness | **blocked at Phase 6 closure** |
 | 9 | Reason | **uniform floor reward and no usable agent workflow** |
 
-Phase 6 is **closed**. Phase 7 is **not approved**. Model capacity is a closed question: it was
-tested once (1.5B → 3B) and is not to be retested at any larger size. The failure mode is stable
-across two model sizes, and the next steps are task design and the reward signal, not scale.
+Phase 6 is **closed**. Model capacity is a closed question: it was tested once (1.5B → 3B) and
+is not to be retested at any larger size. The failure mode is stable across two model sizes, and
+the next steps are task design and the reward signal, not scale.
+
+Phase 7 is **conditionally approved for exactly one optimizer step only**, as a machinery
+feasibility test on the already-validated 3B arm — not as a capacity retest. It is **not
+approved for multi-iteration training**. See
+[ADR-0008](decisions/0008-phase-7-uses-3b-not-1p5b.md).
 
 ---
 
-### Phase 7 — 1.5B GRPO + LoRA training
+### Phase 7 — 3B one-step GRPO + LoRA feasibility smoke
 
-This is the recommended stage to perform the actual RL experiment. It must remain a small,
-controlled feasibility run before scaling to 3B: use a few training tasks, multiple rollouts per
-task, fixed prompts and harness settings, and only 2–5 update iterations initially. Do not
-increase the task count, model size, or training duration until reward variation, finite losses
-and gradients, checkpoint integrity, and basic evaluation behaviour are acceptable.
+**Status: conditionally approved for exactly one optimizer step. Not approved for
+multi-iteration training.**
 
-**7.1 First formal small run**
+Phase 6 infrastructure and rollout collection are runtime-validated. Phase 7 is a
+**machinery feasibility test, not a capacity retest** — model-capacity comparison is closed
+(`docs/PHASE6L_MODEL_CAPACITY_3B.md`) and Phase 7 does not reopen it.
 
-- [ ] Few training tasks
-- [ ] Multiple rollouts per task
-- [ ] Reward variation confirmed
-- [ ] Group advantage sane
-- [ ] Loss finite
-- [ ] Gradient finite
-- [ ] KL finite
-- [ ] Base model frozen
-- [ ] LoRA parameters updated
-- [ ] Checkpoint saved
-- [ ] Optimizer state saved if needed
-- [ ] Full logs saved
+The 1.5B arm produced a uniform floor group, `[-1.0, -1.0, -1.0, -1.0]`, which
+`group_advantages()` rejects with `DegenerateGroupError`; no optimizer update is possible from
+it. The corrected 3B arm produced `[-1.0, -1.0, 0.0, -1.0]`, mean `-0.75`, population standard
+deviation `0.4330`, advantages `[-0.577, -0.577, +1.732, -0.577]`. Reward-eligible rows `4/4`,
+infrastructure-invalid rows `0`, successful `run_tests` executions `2`, non-empty submissions
+`2`, **solved rollouts `0/4`**.
 
-**7.2 Safety stop conditions** — stop the run if any of:
+The signal is carried by one rollout above the floor, so it is sufficient only to test whether
+the training machinery completes one finite, non-zero update. It is not evidence of
+task-solving ability, and **no second iteration may begin automatically**.
 
-- [ ] Loss becomes `NaN`
-- [ ] Gradient becomes `NaN` or explodes
-- [ ] KL spikes
-- [ ] All rewards identical
-- [ ] Safety-gate rate suddenly rises
-- [ ] Valid submissions clearly drop
-- [ ] Checkpoint fails to reload
-- [ ] Base model updated unexpectedly
-- [ ] GPU OOM or abnormal resource use
-- [ ] Private data leakage
+- Model-arm rationale: [ADR-0008](decisions/0008-phase-7-uses-3b-not-1p5b.md)
+- Source group and the test-runner correction:
+  [Phase 6M](PHASE6M_TEST_RUNNER_CORRECTION.md)
 
-**7.3 Controlled iterations**
+> **Permanent prohibition.** No 7B model may be downloaded, loaded, evaluated, fine-tuned or
+> trained, and no 7B model may be recommended as a fallback.
 
-- [ ] Second rollout → verify → update
-- [ ] Third iteration
-- [ ] Decide 2–5 iterations based on results
-- [ ] Checkpoint saved each iteration
-- [ ] Small evaluation each iteration
-- [ ] Never pad training steps using zero-variance rewards
+**7.1 Freeze the one-step training input**
 
----
+- [ ] Use `Qwen/Qwen2.5-Coder-3B-Instruct` at the pinned immutable revision
+- [ ] Load no existing LoRA adapter
+- [ ] Use exactly one approved training task group
+- [ ] Use exactly four reward-eligible rollouts from the same task
+- [ ] Confirm rewards are `[-1.0, -1.0, 0.0, -1.0]`
+- [ ] Confirm distinct reward count is `2`
+- [ ] Confirm population reward standard deviation is approximately `0.433`
+- [ ] Confirm infrastructure-invalid rows are `0`
+- [ ] Confirm every rollout uses the same model, prompt, harness and verifier
+- [ ] Confirm all four rollout IDs and sampling seeds are unique
+- [ ] Confirm no held-out task, hidden-test source or gold patch is included
+- [ ] Confirm the training manifest fingerprints the exact input rollouts
+
+**7.2 One-step GRPO and LoRA configuration**
+
+- [ ] Training iterations: exactly `1`
+- [ ] Optimizer steps: exactly `1`
+- [ ] Gradient accumulation: explicitly recorded
+- [ ] LoRA rank and alpha: explicitly pinned
+- [ ] Learning rate: explicitly pinned
+- [ ] GRPO group size: exactly `4`
+- [ ] Reward normalisation and advantage calculation: explicitly recorded
+- [ ] Mixed-precision mode: explicitly recorded
+- [ ] Gradient clipping threshold: explicitly recorded
+- [ ] Base-model parameters: frozen
+- [ ] Only expected LoRA parameters: trainable
+- [ ] Held-out evaluation: disabled
+- [ ] Reward v1: live training reward
+- [ ] Reward v2: offline analysis only
+- [ ] No 7B model usage
+- [ ] Output checkpoint: temporary diagnostic LoRA checkpoint only
+
+**7.3 Pre-optimizer validation**
+
+- [ ] All four rewards are finite
+- [ ] Group mean reward is finite
+- [ ] Group variance is greater than zero
+- [ ] Advantages are finite
+- [ ] Advantages are not all zero
+- [ ] Advantage ordering agrees with the reward ordering
+- [ ] Training loss before the optimizer step is finite
+- [ ] No reward-ineligible row is included
+- [ ] No infrastructure-failure row is included
+- [ ] No private verifier content is exposed to the model
+
+**7.4 Optimizer-step validation**
+
+- [ ] Exactly one forward and backward training update completes
+- [ ] Loss is finite
+- [ ] Every trainable gradient is finite
+- [ ] Global gradient norm is finite
+- [ ] Global gradient norm is greater than zero
+- [ ] Gradient norm remains below the documented hard stop threshold
+- [ ] Optimizer step count is exactly `1`
+- [ ] Learning rate is recorded
+- [ ] No unexpected parameter becomes trainable
+- [ ] No GPU OOM or abnormal allocation occurs
+
+**7.5 Parameter-integrity validation**
+
+- [ ] Record base-model checksum before the update
+- [ ] Record base-model checksum after the update
+- [ ] Confirm zero base-model tensors changed
+- [ ] Record LoRA checksum before the update
+- [ ] Record LoRA checksum after the update
+- [ ] Confirm at least one LoRA tensor changed
+- [ ] Record trainable parameter names and counts
+- [ ] Confirm only intended LoRA parameters changed
+
+**7.6 Checkpoint validation**
+
+- [ ] Save one temporary LoRA diagnostic checkpoint
+- [ ] Save the exact training manifest beside the checkpoint
+- [ ] Save optimizer state only if required for deterministic continuation
+- [ ] Record checkpoint SHA-256
+- [ ] Reload the checkpoint into the pinned 3B base model
+- [ ] Confirm the adapter loads without missing or unexpected keys
+- [ ] Confirm one deterministic inference request completes after reload
+- [ ] Do not promote the checkpoint to a formal experiment checkpoint
+
+**7.7 Hard safety stops**
+
+Stop immediately if any of the following occurs:
+
+- [ ] Loss is `NaN` or `Inf`
+- [ ] Any advantage is `NaN` or `Inf`
+- [ ] All advantages are zero
+- [ ] Any gradient is `NaN` or `Inf`
+- [ ] Global gradient norm is zero
+- [ ] Global gradient norm exceeds the pinned hard limit
+- [ ] Any base-model tensor changes
+- [ ] Optimizer step count exceeds `1`
+- [ ] A reward-ineligible or infrastructure-invalid row enters training
+- [ ] Held-out or hidden-test content enters training
+- [ ] Checkpoint save fails
+- [ ] Checkpoint reload fails
+- [ ] GPU OOM or abnormal resource use occurs
+- [ ] Another user's process would need to be interrupted
+- [ ] Any 7B model is requested or loaded
+
+**7.8 Decision after the one-step smoke**
+
+Choose exactly one:
+
+- **A — Training machinery validated**
+
+  - one finite, non-zero update completed
+  - base model remained frozen
+  - LoRA parameters changed
+  - checkpoint saved and reloaded
+  - no safety gate failed
+- **B — Training machinery executed but produced no meaningful update**
+
+  - loss and gradients were finite
+  - gradient norm or LoRA delta was effectively zero
+  - do not continue to more iterations
+- **C — Training or checkpoint infrastructure failed**
+
+  - repair only the identified infrastructure defect
+  - do not increase task count, model size or iterations
+- **D — Safety or integrity failure**
+
+  - stop Phase 7
+  - preserve all evidence
+  - do not resume training without a separate review
+
+**7.9 Controlled iterations, only after Decision A**
+
+- [ ] Run a second rollout → verify → one update cycle
+- [ ] Re-evaluate reward variation before every update
+- [ ] Never train on a zero-variance group
+- [ ] Save and reload a checkpoint after each approved iteration
+- [ ] Run at most `2–5` total iterations during the feasibility phase
+- [ ] Stop if valid submissions, reward variation or safety metrics deteriorate
+- [ ] Do not increase task count and iteration count in the same experiment
+- [ ] Do not use or test a 7B model
 
 ### Phase 8 — 1.5B before-and-after evaluation *(most important evidence)*
 
@@ -1232,8 +1363,9 @@ harness-specific behaviour; 7B not formally trained; limited statistical power.
 6. Add unit tests and leakage tests for `reward_v2`.
 7. Audit the training code to classify it as full GRPO or GRPO-style.
 8. Fix the 1.5B baseline and experiment configuration.
-9. Re-collect baseline rollouts under the Phase 6B context fix, then execute the Phase 7 small
-   1.5B GRPO + LoRA run.
+9. ~~Re-collect baseline rollouts under the Phase 6B context fix, then execute the Phase 7 small
+   1.5B GRPO + LoRA run.~~ Historical plan. Phase 6 is closed and Phase 7 uses the 3B arm
+   ([ADR-0008](decisions/0008-phase-7-uses-3b-not-1p5b.md)).
 10. Reload the updated checkpoint and complete the fair baseline vs updated 1.5B comparison in Phase 8.
 
 ---
