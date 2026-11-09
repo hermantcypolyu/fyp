@@ -1,11 +1,27 @@
-"""One-step GRPO-style optimizer smoke for multi-turn coding rollouts.
+"""Phase 7 one-step GRPO + LoRA feasibility smoke for a 3B coding model.
 
 This script is deliberately small and trainer-independent. It proves that:
 - real multi-turn rollout token IDs and old log-probabilities are usable;
 - group-relative advantages reach a masked policy loss;
 - tool outputs do not receive gradients;
 - LoRA parameters update;
+- the base-model weights are byte-identical afterwards;
 - the adapter checkpoint saves and reloads correctly.
+
+Phase 7 scope, enforced by `training/phase7_guards.py`
+------------------------------------------------------
+Exactly one model (the pinned 3B revision), exactly one four-rollout group,
+exactly one forward/backward/optimizer step, LoRA only, no generation of any
+kind, no existing adapter. The guards refuse before any model or tokenizer load,
+so a mistyped invocation costs nothing.
+
+What this script does *not* claim
+---------------------------------
+There is no reference-policy KL term, so the KL column reads
+`NOT_APPLICABLE_CURRENT_IMPLEMENTATION` rather than 0.0. No rollout is generated:
+the input is recorded Phase 6M evidence. A single optimizer step on four rollouts
+is a feasibility check, not a training result, and no performance claim follows
+from it.
 """
 
 from __future__ import annotations
@@ -25,11 +41,30 @@ from torch.nn.utils import clip_grad_norm_
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from training.grpo_math import DegenerateGroupError, group_advantages
+from training.phase7_guards import (
+    EXPECTED_OPTIMIZER_STEPS,
+    KL_STATUS_NOT_APPLICABLE,
+    PERMITTED_MODEL_NAME,
+    PERMITTED_MODEL_REVISION,
+    OptimizerStepCounter,
+    Phase7ExecutionPlan,
+    Phase7Violation,
+    assert_lora_only_trainable,
+    assert_phase7_model_is_permitted,
+    base_tensor_manifest,
+    compare_base_manifests,
+    count_changed_tensors,
+    load_permitted_model,
+    load_permitted_tokenizer,
+    tensor_digest,
+    validate_execution_plan,
+    validate_rollout_group,
+)
 from training.rollout_adapter import EpisodeTrainingSample, adapt_rollout
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--rollouts",
         type=Path,
@@ -40,9 +75,17 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         required=True,
     )
+    # The default is the permitted model rather than the 1.5B, so the bare
+    # invocation is the correct one. ADR-0008 excludes the 1.5B from Phase 7.
     parser.add_argument(
         "--model",
-        default="Qwen/Qwen2.5-Coder-1.5B-Instruct",
+        default=PERMITTED_MODEL_NAME,
+    )
+    # Pinned explicitly rather than resolved from the cache. A cache-state
+    # resolution is not a revision, and Phase 6M ran this exact snapshot.
+    parser.add_argument(
+        "--revision",
+        default=PERMITTED_MODEL_REVISION,
     )
     parser.add_argument(
         "--temperature",
@@ -69,17 +112,40 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=16,
     )
+    # `--adapter-checkpoint` used to allow continuing an existing adapter. It is
+    # gone rather than defaulted to None: an option that exists can be passed, and
+    # Phase 7 must start from a fresh adapter. Any invocation using it now fails at
+    # argument parsing, before any guard or GPU work.
     parser.add_argument(
-        "--adapter-checkpoint",
+        "--diagnostic-input-manifest",
         type=Path,
         default=None,
-        help=("Existing LoRA checkpoint to continue training from. If omitted, a new LoRA adapter is created."),
+        help=(
+            "Phase 7 Part C input manifest to verify against these rollouts before "
+            "training. Optional, but recorded in the metrics when supplied."
+        ),
     )
     return parser.parse_args()
 
 
-def load_samples(path: Path) -> list[EpisodeTrainingSample]:
+def load_samples(path: Path) -> tuple[list[EpisodeTrainingSample], list[dict[str, Any]]]:
+    """Adapt the recorded rollout rows, refusing anything but the Phase 7 group.
+
+    Returns the adapted samples *and* the raw rows, because the guard needs the
+    raw `rollout_index` / `reward` / `task_id` fields that the adapted dataclass
+    does not carry, and re-reading the file to get them would risk reading a
+    different file than the one that was validated.
+
+    A row that adapts to ``None`` is a hard error here. `adapt_rollout` returns
+    ``None`` for "no trainable turns", and silently dropping such a row would leave
+    a three-member group whose advantages are computed over three rewards. The old
+    behaviour printed a warning and continued; Phase 7 requires four rows or none.
+    """
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    # Cardinality, single-task, uniqueness and the exact reward sequence are all
+    # checked on the raw rows before a single model or tokenizer is constructed.
+    validate_rollout_group(rows)
 
     samples: list[EpisodeTrainingSample] = []
 
@@ -87,20 +153,17 @@ def load_samples(path: Path) -> list[EpisodeTrainingSample]:
         sample = adapt_rollout(row)
 
         if sample is None:
-            print(f"Discarding rollout {index}: no trainable turns")
-            continue
+            raise Phase7Violation(
+                f"Rollout {index} has no trainable turns. Dropping it would change the group "
+                "from four members to three and recompute the advantages over a different group."
+            )
 
         samples.append(sample)
 
-    if len(samples) < 2:
-        raise RuntimeError("Optimizer smoke requires at least two scored rollouts.")
+    if len(samples) != len(rows):
+        raise Phase7Violation(f"Expected {len(rows)} training samples; adapted {len(samples)}.")
 
-    task_ids = {sample.task_id for sample in samples}
-
-    if len(task_ids) != 1:
-        raise RuntimeError(f"All GRPO group members must come from the same task. Found: {sorted(task_ids)}")
-
-    return samples
+    return samples, rows
 
 
 def compute_advantages(
@@ -220,6 +283,33 @@ def main() -> None:
     if args.temperature <= 0:
         raise ValueError("temperature must be positive")
 
+    # ---- Phase 7 gate: everything here happens before any model load ----
+    #
+    # Order matters and is deliberate. The model guard runs first because it is
+    # the one prohibition with no override, and because a refused 7B must not even
+    # initialise CUDA. `assert_phase7_model_is_permitted` takes `torch.cuda.is_initialized`
+    # as a callback so the ordering is checked rather than assumed.
+    assert_phase7_model_is_permitted(
+        args.model,
+        args.revision,
+        cuda_initialised=torch.cuda.is_initialized,
+    )
+
+    validate_execution_plan(
+        Phase7ExecutionPlan(
+            model_name=args.model,
+            model_revision=args.revision,
+        )
+    )
+
+    # One fresh directory per run. Refusing to reuse it is cheaper than discovering
+    # afterwards that the checkpoint on disk was the previous run's.
+    if args.output_dir.exists() and any(args.output_dir.iterdir()):
+        raise Phase7Violation(
+            f"Output directory is not empty: {args.output_dir}. Phase 7 writes to a fresh "
+            "directory so a stale checkpoint can never be mistaken for this run's."
+        )
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir = args.output_dir / "checkpoint"
     metrics_path = args.output_dir / "training_metrics.json"
@@ -234,9 +324,11 @@ def main() -> None:
         raise RuntimeError("CUDA is not available.")
 
     print("GPU:", torch.cuda.get_device_name(device))
+    print("Model:", args.model)
+    print("Revision:", args.revision)
     print("Loading rollouts:", args.rollouts)
 
-    samples = load_samples(args.rollouts)
+    samples, raw_rows = load_samples(args.rollouts)
     advantages, reward_mean, reward_std = compute_advantages(samples)
 
     rewards = [sample.reward for sample in samples]
@@ -284,13 +376,19 @@ def main() -> None:
 
     load_started = time.monotonic()
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model,
+    # `load_permitted_*` re-verifies the pin and passes `revision=` explicitly, so
+    # the weights are the Phase 6M snapshot even if the local cache has moved on.
+    tokenizer = load_permitted_tokenizer(
+        AutoTokenizer.from_pretrained,
+        model_name=args.model,
+        revision=args.revision,
         local_files_only=True,
     )
 
-    base_model = AutoModelForCausalLM.from_pretrained(
-        args.model,
+    base_model = load_permitted_model(
+        AutoModelForCausalLM.from_pretrained,
+        model_name=args.model,
+        revision=args.revision,
         local_files_only=True,
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
@@ -315,25 +413,17 @@ def main() -> None:
         ],
     )
 
-    if args.adapter_checkpoint is not None:
-        if not args.adapter_checkpoint.is_dir():
-            raise FileNotFoundError(f"Adapter checkpoint directory does not exist: {args.adapter_checkpoint}")
-
-        print(
-            "Loading trainable LoRA checkpoint:",
-            args.adapter_checkpoint,
-        )
-
-        model = PeftModel.from_pretrained(
-            base_model,
-            args.adapter_checkpoint,
-            is_trainable=True,
-        )
-    else:
-        print("Creating a new LoRA adapter")
-        model = get_peft_model(base_model, lora_config)
+    # Phase 7 always builds a fresh adapter. The previous branch that loaded an
+    # existing checkpoint with `is_trainable=True` is gone; `validate_execution_plan`
+    # refuses that plan and the CLI no longer offers the flag.
+    print("Creating a new LoRA adapter")
+    model = get_peft_model(base_model, lora_config)
 
     model.train()
+
+    # Every trainable parameter must be a LoRA tensor and no base tensor may be
+    # trainable. Counts are measured here and reported, not asserted afterwards.
+    trainable_parameter_count_named, frozen_parameter_count = assert_lora_only_trainable(model.named_parameters())
 
     trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
 
@@ -342,7 +432,17 @@ def main() -> None:
 
     trainable_parameter_count = sum(parameter.numel() for parameter in trainable_parameters)
 
+    # ---- Deterministic base-model manifest, before any forward pass ----
+    #
+    # Digests of every non-LoRA tensor. Recomputed after the step and compared
+    # tensor by tensor, which is what proves the base model stayed frozen rather
+    # than merely asserting that PEFT usually keeps it that way.
+    base_manifest_before = base_tensor_manifest(model.named_parameters())
+
+    print("Trainable LoRA parameter tensors:", trainable_parameter_count_named)
+    print("Frozen parameter tensors:", frozen_parameter_count)
     print("Trainable LoRA parameters:", trainable_parameter_count)
+    print("Base tensors fingerprinted:", len(base_manifest_before))
     print(
         "Model load seconds:",
         round(time.monotonic() - load_started, 3),
@@ -352,9 +452,21 @@ def main() -> None:
         trainable_parameters,
         lr=args.learning_rate,
         weight_decay=0.0,
+        betas=(0.9, 0.999),
+        eps=1.0e-8,
     )
 
     before = trainable_parameter_snapshot(model)
+
+    # LoRA digests before the step, for the "at least one adapter tensor moved" check.
+    lora_digest_before = {
+        name: tensor_digest(parameter) for name, parameter in model.named_parameters() if "lora_" in name
+    }
+
+    # A real counter, not a boolean. `assert_zero` here and `assert_exactly_one`
+    # after the step are the enforcement of "exactly one update".
+    step_counter = OptimizerStepCounter()
+    step_counter.assert_zero()
 
     optimizer.zero_grad(set_to_none=True)
 
@@ -486,6 +598,11 @@ def main() -> None:
 
     optimizer.step()
 
+    # The counter only moves after `step()` returned normally, so a raise above
+    # leaves it at zero and this assertion records a failure rather than a claim.
+    step_counter.record_completed_step()
+    step_counter.assert_exactly_one()
+
     after = trainable_parameter_snapshot(model)
 
     changed_parameters, delta_l2, max_absolute_delta = parameter_delta(
@@ -499,6 +616,31 @@ def main() -> None:
     if delta_l2 <= 0:
         raise RuntimeError("LoRA parameter delta is zero after optimizer.step().")
 
+    # ---- LoRA verification: at least one adapter tensor must have moved ----
+    lora_digest_after = {
+        name: tensor_digest(parameter) for name, parameter in model.named_parameters() if "lora_" in name
+    }
+
+    changed_lora_tensors = count_changed_tensors(lora_digest_before, lora_digest_after)
+
+    if not changed_lora_tensors:
+        raise RuntimeError("No LoRA tensor changed content after optimizer.step().")
+
+    # ---- Base-model freeze verification: zero tensors may have changed ----
+    #
+    # Recomputed from the live model, not from a saved copy, so this measures the
+    # weights that would actually be saved.
+    base_manifest_after = base_tensor_manifest(model.named_parameters())
+    base_changes = compare_base_manifests(base_manifest_before, base_manifest_after)
+
+    total_base_changes = sum(len(names) for names in base_changes.values())
+
+    if total_base_changes != 0:
+        raise RuntimeError(
+            "Base-model tensors changed during a LoRA-only step: "
+            + json.dumps({kind: names[:10] for kind, names in base_changes.items() if names})
+        )
+
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(checkpoint_dir)
     tokenizer.save_pretrained(checkpoint_dir)
@@ -509,9 +651,16 @@ def main() -> None:
     training_seconds = time.monotonic() - training_started
 
     metrics: dict[str, Any] = {
+        "phase": 7,
         "model": args.model,
+        "model_revision": args.revision,
+        # The KL column is a string because the implementation has no reference
+        # policy and therefore no KL to report. Writing 0.0 here would claim a
+        # measurement that was never taken.
+        "reference_policy_kl": KL_STATUS_NOT_APPLICABLE,
         "task_id": samples[0].task_id,
         "rollouts": len(samples),
+        "rollout_indices": [row.get("rollout_index") for row in raw_rows],
         "rewards": rewards,
         "reward_mean": reward_mean,
         "reward_std": reward_std,
@@ -522,9 +671,22 @@ def main() -> None:
         "trainable_tokens": total_trainable_tokens,
         "temperature": args.temperature,
         "learning_rate": args.learning_rate,
+        "adamw_betas": [0.9, 0.999],
+        "adamw_eps": 1.0e-8,
+        "weight_decay": 0.0,
         "clip_epsilon": args.clip_epsilon,
+        "max_grad_norm": args.max_grad_norm,
+        "gradient_clipping_bound": clipped_gradient_norm_value < raw_gradient_norm,
         "lora_rank": args.lora_rank,
+        "lora_alpha": args.lora_rank * 2,
+        "iterations": 1,
+        "planned_optimizer_steps": EXPECTED_OPTIMIZER_STEPS,
+        # Measured, not asserted: the counter increments only after step() returns.
+        "optimizer_step_count": step_counter.count,
+        "optimizer_step_completed": step_counter.count == EXPECTED_OPTIMIZER_STEPS,
         "trainable_parameter_count": trainable_parameter_count,
+        "trainable_parameter_tensors": trainable_parameter_count_named,
+        "frozen_parameter_tensors": frozen_parameter_count,
         "policy_loss": total_loss_value,
         "loss_is_finite": math.isfinite(total_loss_value),
         "raw_gradient_norm": raw_gradient_norm,
@@ -536,11 +698,22 @@ def main() -> None:
         "old_logprob_mean": statistics.fmean(old_logprob_values),
         "current_logprob_mean": statistics.fmean(current_logprob_values),
         "changed_lora_parameters": changed_parameters,
+        "changed_lora_tensors": len(changed_lora_tensors),
+        "changed_lora_tensor_names": changed_lora_tensors[:20],
         "parameter_delta_l2": delta_l2,
         "max_absolute_parameter_delta": max_absolute_delta,
-        "optimizer_step_completed": True,
+        "base_tensors_fingerprinted": len(base_manifest_before),
+        "base_tensors_changed": total_base_changes,
+        "base_tensor_changes": {kind: names for kind, names in base_changes.items() if names},
         "checkpoint_saved": checkpoint_dir.exists(),
         "checkpoint_reloaded": False,
+        "prohibited_paths_disabled": {
+            "rollout_generation": False,
+            "evaluation_generation": False,
+            "heldout_evaluation": False,
+            "existing_adapter": False,
+            "multi_iteration": False,
+        },
         "peak_vram_mb": peak_vram_mb,
         "training_seconds": training_seconds,
         "gpu": torch.cuda.get_device_name(device),
@@ -552,9 +725,12 @@ def main() -> None:
     )
 
     print("\n===== OPTIMIZER STEP =====")
+    print("Optimizer steps:", step_counter.count)
     print("Policy loss:", total_loss_value)
     print("Raw gradient norm:", raw_gradient_norm)
     print("Clipped gradient norm:", clipped_gradient_norm_value)
+    print("Changed LoRA tensors:", len(changed_lora_tensors))
+    print("Changed base tensors:", total_base_changes)
     print("Changed LoRA parameters:", changed_parameters)
     print("Parameter delta L2:", delta_l2)
     print("Max absolute delta:", max_absolute_delta)
@@ -569,8 +745,10 @@ def main() -> None:
 
     print("\nReloading checkpoint...")
 
-    reload_base = AutoModelForCausalLM.from_pretrained(
-        args.model,
+    reload_base = load_permitted_model(
+        AutoModelForCausalLM.from_pretrained,
+        model_name=args.model,
+        revision=args.revision,
         local_files_only=True,
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
@@ -584,13 +762,20 @@ def main() -> None:
 
     reloaded_adapter = adapter_parameter_snapshot(reloaded_model)
 
-    common_names = sorted(set(saved_adapter) & set(reloaded_adapter))
+    # Strict key equality, not an intersection. The previous version compared only
+    # keys present on both sides, so a checkpoint missing an adapter tensor, or
+    # carrying an extra one, still passed.
+    missing_keys = sorted(set(saved_adapter) - set(reloaded_adapter))
+    unexpected_keys = sorted(set(reloaded_adapter) - set(saved_adapter))
 
-    if not common_names:
-        raise RuntimeError("No common LoRA parameter names were found after reload.")
+    if missing_keys or unexpected_keys:
+        raise RuntimeError(
+            "Reloaded adapter keys differ from the saved adapter. "
+            f"missing={missing_keys[:10]} unexpected={unexpected_keys[:10]}"
+        )
 
     reload_max_difference = max(
-        float((saved_adapter[name] - reloaded_adapter[name]).abs().max().item()) for name in common_names
+        float((saved_adapter[name] - reloaded_adapter[name]).abs().max().item()) for name in sorted(saved_adapter)
     )
 
     if reload_max_difference != 0.0:
@@ -600,7 +785,9 @@ def main() -> None:
         )
 
     metrics["checkpoint_reloaded"] = True
-    metrics["reloaded_lora_parameter_count"] = len(common_names)
+    metrics["reloaded_lora_parameter_count"] = len(saved_adapter)
+    metrics["reload_missing_adapter_keys"] = missing_keys
+    metrics["reload_unexpected_adapter_keys"] = unexpected_keys
     metrics["reload_max_parameter_difference"] = reload_max_difference
 
     metrics_path.write_text(
@@ -608,7 +795,7 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    print("Reloaded LoRA tensors:", len(common_names))
+    print("Reloaded LoRA tensors:", len(saved_adapter))
     print("Reload max difference:", reload_max_difference)
     print("\nPASS: one-step optimizer smoke completed")
 
