@@ -957,6 +957,42 @@ reward stdev 0.0, 0 solved rollouts across all twelve scored rollouts of the ser
 prompt-level remediation is **closed**. The open hypotheses are model capacity and task design;
 both are evaluated before any GRPO run. No further Phase 6 sub-phase follows 6K.
 
+**Phase 6L — model-capacity diagnostic (closed)**
+
+One controlled run changing **only model size**, 1.5B → 3B (`Qwen/Qwen2.5-Coder-3B-Instruct`
+@ `488639f1ff808d1d3d0ba301aef8c11461451ec5`), with task, four seeds, sampling settings, prompts,
+tool definitions, budgets and reward config all held identical. Tokenizer parity between the two
+models was verified bit-for-bit, so the context budget stayed a controlled variable. Full record:
+`docs/PHASE6L_MODEL_CAPACITY_3B.md`.
+
+- Infrastructure: 4 of 4 rows valid, 0 infrastructure-invalid, 0 context overflow, 80 POSTs all
+  200.
+- Behaviour: mean tool calls 5.25 → 10.75, successful edits 0 → 18, `run_tests` 0 → 1,
+  non-empty patches 0 → 2, parseable tool-call rows 2/4 → 3/4.
+- Reward: **1 distinct value (−1.0), stdev 0.0, 0 solved — identical to 6K.**
+- Both non-empty patches fail on the merits: one is semantically wrong (inflates `per_page`
+  instead of fixing `total_pages`), one is syntactically broken (a line repeated 16×).
+- **Decision: C — no material improvement over 1.5B.**
+- New defect surfaced: `run_tests` reports `No module named pytest` in the serving interpreter.
+
+**Phase 6 closure — final status**
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Rollout infrastructure runtime-validated | **complete** |
+| 2 | Independent sampling (4 distinct seeds, `sha256_u32_v1`) | **complete** |
+| 3 | Hard context-budget enforcement | **complete** |
+| 4 | Workspace navigation remediation | **complete** |
+| 5 | Workflow-guidance remediation | **complete** |
+| 6 | Behavioural acceptance | **failed** |
+| 7 | Accepted training group | **unavailable** |
+| 8 | Phase 7 readiness | **blocked** |
+| 9 | Reason | **uniform floor reward and no usable agent workflow** |
+
+Phase 6 is **closed**. Phase 7 is **not approved**. A final 7B diagnostic is not recommended on
+current evidence: the failure mode is stable across two model sizes, and the cheaper next steps
+are fixing the `run_tests` environment and re-examining task design.
+
 ---
 
 ### Phase 7 — 1.5B GRPO + LoRA training
