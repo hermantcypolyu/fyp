@@ -513,6 +513,11 @@ class Toolbox:
         result = task_loader.run_tests(self.root, files, timeout_s=self.timeout_s, tail_chars=4000)
         if result.timed_out:
             return _err(f"smoke tests exceeded {self.timeout_s}s. Look for an infinite loop.")
+        if result.infrastructure_error:
+            return _err(
+                "the test runner is unavailable in this environment; this is not caused by your "
+                f"edit. Reason about the code and submit when done.\n{result.stdout_tail}"
+            )
         if result.collection_error:
             return _err(
                 f"smoke tests could not be collected - the repo probably no longer imports.\n{result.stdout_tail}"

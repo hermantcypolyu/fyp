@@ -47,6 +47,53 @@ _ISOLATED_INI = "[pytest]\naddopts =\n"
 
 _IGNORE = ("__pycache__", "*.pyc", ".pytest_cache", "*.egg-info")
 
+#: Environment variable naming the interpreter that runs tests. See `_resolve_test_interpreter`.
+TEST_PYTHON_ENV = "FYP_TEST_PYTHON"
+
+#: Matches the interpreter's own "pytest is not installed" failure, which `python -m pytest`
+#: emits on stderr before pytest itself ever starts. Distinguished from a genuine collection
+#: error because it says nothing about the candidate patch.
+_MISSING_PYTEST_RE = re.compile(r"No module named ['\"]?_?pytest\b", re.IGNORECASE)
+
+
+def _resolve_test_interpreter() -> str:
+    """Return the interpreter that should run `pytest`.
+
+    Why this is not simply `sys.executable` (Phase 6M)
+    --------------------------------------------------
+    `run_tests` used to invoke pytest with `sys.executable`. In a rollout the collector runs
+    under the **serving** virtualenv (vLLM + transformers), and that venv deliberately does
+    not carry the project's dev extras. So `sys.executable -m pytest` dead-ended with
+    `No module named pytest`, which surfaced to the agent as an unhelpful "could not be
+    collected" error and made the verify step impossible for every model regardless of
+    capacity. Phase 6L is what first exposed this.
+
+    Installing pytest into the serving venv is not the answer: that venv exists to serve
+    models, and mutating it would invalidate the pinned-version record the experiment relies
+    on. Instead, test execution is pinned to the project interpreter, which is where pytest
+    is declared (`[project.optional-dependencies] dev` in pyproject.toml).
+
+    Resolution order:
+
+    1. `FYP_TEST_PYTHON`, if set and executable - explicit override for CI or alternate hosts.
+    2. The repository's own `.venv/bin/python`, if it exists and is executable.
+    3. `sys.executable` - fallback, so this module still works when vendored elsewhere.
+
+    This is deliberately separate from `sys.executable` so that the process serving the model
+    and the process running tests stay independent: a pytest crash or a bad plugin cannot
+    destabilise the inference server, and the server's pinned packages cannot mask a missing
+    test dependency.
+    """
+    override = os.environ.get(TEST_PYTHON_ENV)
+    if override and Path(override).is_file() and os.access(override, os.X_OK):
+        return override
+
+    project_venv = REPO_ROOT / ".venv" / "bin" / "python"
+    if project_venv.is_file() and os.access(project_venv, os.X_OK):
+        return str(project_venv)
+
+    return sys.executable
+
 
 class TaskError(Exception):
     """Something is wrong with a task on disk. The message names the file and the fix."""
@@ -222,6 +269,10 @@ class TestResult:
     collection_error: bool = False
     returncode: int | None = None
     stdout_tail: str = ""
+    #: Set when the *environment* could not run pytest at all (missing pytest, missing
+    #: interpreter). This is never the model's fault and must not be scored as a failed
+    #: attempt.
+    infrastructure_error: bool = False
 
     @property
     def pass_fraction(self) -> float:
@@ -233,6 +284,8 @@ class TestResult:
         return self.collected > 0 and self.passed == self.collected
 
     def summary(self) -> str:
+        if self.infrastructure_error:
+            return "INFRASTRUCTURE ERROR"
         if self.timed_out:
             return "TIMEOUT"
         if self.collection_error:
@@ -288,8 +341,10 @@ def run_tests(
     )
     env.update(env_overrides or {})
 
+    interpreter = _resolve_test_interpreter()
+
     cmd = [
-        sys.executable,
+        interpreter,
         "-m",
         "pytest",
         "-c",
@@ -329,6 +384,13 @@ def run_tests(
     result.returncode = proc.returncode
     output = (proc.stdout or "") + (proc.stderr or "")
     result.stdout_tail = output[-tail_chars:]
+
+    if _MISSING_PYTEST_RE.search(output):
+        # pytest is not importable in the chosen interpreter. That is a broken environment,
+        # not a wrong answer from the model, and must never be scored as a failed attempt.
+        result.infrastructure_error = True
+        result.collection_error = True
+        return result
 
     if not junit.is_file():
         # pytest died before it could write a report - almost always a collection error.
