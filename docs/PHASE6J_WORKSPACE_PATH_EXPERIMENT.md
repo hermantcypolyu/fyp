@@ -71,3 +71,44 @@ reward standard deviation, solved rollouts, mean turns and mean tool calls.
 Differing trajectories are not improvement. A change counts only if it moves those
 metrics in the direction the remediation predicted: fewer not-found calls, more
 correct-path calls, and at least one genuine edit or test run.
+
+## Result (recorded 2026-11-09)
+
+Run `phase6j_bugfix_offbyone_pagination_20261109T090714Z`, 4 rollouts, compared
+against the Phase 6I control `…20261109T084300Z`. Identity levers were verified
+byte-identical between the two `merged_config.yaml` files (model, revision,
+prompt version, temperature, top_p, seed, seed derivation, turn and tool
+budgets, verifier entrypoint). The server log shows the same four seeds
+(`184288048`, `3168762815`, `475852200`, `1693580453`) with zero HTTP 4xx/5xx.
+
+| Metric | 6I control | 6J remediated |
+|---|---|---|
+| infrastructure-valid rows | 4 | 3 |
+| correct-path tool calls | 0 | **16** |
+| file-not-found calls | 20 | **0** |
+| repeated identical failed calls | 19 | **0** |
+| successful edits | 0 | 0 |
+| `run_tests` calls | 0 | 0 |
+| submissions | 1 | 0 |
+| non-empty submissions | 0 | 0 |
+| rewards | -1, -1, -1, -1 | -1, -1, -1 |
+| distinct rewards | 1 | 1 |
+| reward stdev | 0.0 | 0.0 |
+| solved rollouts | 0 | 0 |
+| mean turns | 15.5 | 16.75 |
+| mean tool calls | 6.75 | 10.25 |
+
+The remediation did what it was designed to do, and only that. The navigation
+defect is gone: 20 not-found calls and 19 repeated identical failed calls became
+zero, and 16 tool calls now use the `repo/` prefix that the sandbox requires.
+The reward did not move, and reward variance did not appear, because the failure
+that remains is a different one - the model never edits and never runs the
+tests it can now reach.
+
+One rollout (`r02`) is an infrastructure-invalid row, not a scored episode: after
+compaction its prompt still needed 9242 tokens against `max_model_len` 8192, so
+the request was never sent (`stage: preflight_after_compaction`,
+`reward_eligible: false`). It is counted as infra-invalid, not as a `-1.0`.
+
+Decision A is therefore not met: 1 distinct reward, stdev 0.0, 0 non-empty
+submissions, 1 infrastructure-invalid row.
