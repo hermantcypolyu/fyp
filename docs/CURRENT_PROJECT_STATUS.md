@@ -939,6 +939,24 @@ overflow. The growth came from accumulated assistant prose that was retained acr
 - Model parameter update: **not performed**
 - `reward_v2` live integration: **not approved**
 
+**Phase 6I / 6J / 6K — behavioural remediation series (closed)**
+
+Three diagnostic experiments ran on one task (`bugfix_offbyone_pagination`), the same model,
+sampling settings and four deterministic seeds, each changing one harness lever. Full record:
+`docs/PHASE6K_WORKFLOW_PROCEDURE_EXPERIMENT.md`.
+
+- **6I (control)** — 20 file-not-found calls, 7 edit calls, 0 `run_tests`, 1 empty submission.
+- **6J (workspace-path guidance)** — not-found calls 20 → 0 and correct `repo/` paths 0 → 16,
+  but 1 infrastructure-invalid row and still 0 `run_tests`.
+- **6K (workflow procedure + hard compaction token limit)** — infrastructure-invalid 1 → 0,
+  context overflow 1 → 0, true peak prompt 5301 of 7104 tokens, but 0 `run_tests`, 0
+  submissions, and 2 of 4 rollouts emitted no parseable tool call in 20 turns.
+
+Both 6K defects were genuinely fixed and neither moved the reward: 1 distinct reward (−1.0),
+reward stdev 0.0, 0 solved rollouts across all twelve scored rollouts of the series. Further
+prompt-level remediation is **closed**. The open hypotheses are model capacity and task design;
+both are evaluated before any GRPO run. No further Phase 6 sub-phase follows 6K.
+
 ---
 
 ### Phase 7 — 1.5B GRPO + LoRA training
