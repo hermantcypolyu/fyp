@@ -424,7 +424,24 @@ def infrastructure_failure(
         "message": _clip(message, 2000),
     }
     if probe is not None:
-        record["context_budget"] = probe.to_dict()
+        # `Probe.to_dict()` is deliberately NOT used here. Its key set is the trace's
+        # top-level `context_budget` vocabulary, while this nested block is a different
+        # schema object with `additionalProperties: false`: it requires `capacity` and
+        # rejects `reserved_completion_tokens`, `safety_margin_tokens` and
+        # `context_remaining_tokens`. Emitting the probe verbatim made every persisted
+        # infrastructure-failure row fail validation - a latent defect that stayed hidden
+        # only because the prior run wrote no such row, so the path was never exercised.
+        record["context_budget"] = {
+            "max_model_len": probe.budget.max_model_len,
+            "capacity": probe.budget.capacity,
+            # A probe that could not measure the prompt has `prompt_tokens: None`; the
+            # schema requires an integer, and 0 is the honest floor for "no tokens
+            # measured" here because the failure is already recorded in `error_type`.
+            "prompt_tokens": probe.prompt_tokens if probe.prompt_tokens is not None else 0,
+            "status": probe.status,
+        }
+        if probe.detail:
+            record["context_budget"]["detail"] = _clip(probe.detail, 2000)
     return record
 
 

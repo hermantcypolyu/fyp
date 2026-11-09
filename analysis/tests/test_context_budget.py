@@ -300,6 +300,44 @@ def test_infrastructure_failure_carries_the_probe_when_given() -> None:
     assert failure["context_budget"]["status"] == STATUS_EXCEEDED
 
 
+def test_infrastructure_failure_context_budget_matches_the_schema() -> None:
+    """13b. The nested probe record must satisfy the schema, not merely look right.
+
+    Regression: `infrastructure_failure` emitted `Probe.to_dict()`, whose key set is the
+    trace's TOP-LEVEL `context_budget` vocabulary. The nested block is a different schema
+    object with `additionalProperties: false`, requiring `capacity` and rejecting
+    `reserved_completion_tokens` / `safety_margin_tokens` / `context_remaining_tokens`.
+    Every persisted infrastructure-failure row therefore failed validation at
+    `_persist_evidence`. It stayed latent because a prior run wrote no such row, so the
+    path was never exercised - hence asserting schema conformance, not just a key or two.
+    """
+    schema = json.loads((REPO / "analysis" / "trace_schema.json").read_text(encoding="utf-8"))
+    nested = schema["properties"]["infrastructure_failure"]["properties"]["context_budget"]
+
+    budget = ContextBudget(max_model_len=8192, reserved_completion_tokens=1024, safety_margin_tokens=64)
+    probe = Probe(prompt_tokens=7200, budget=budget, status=STATUS_EXCEEDED, detail="over budget")
+    failure = infrastructure_failure(
+        error_type="context_budget_exceeded", stage="preflight", message="over", probe=probe
+    )
+    record = failure["context_budget"]
+
+    # Exact key set: `additionalProperties: false` makes an extra key a hard failure.
+    assert set(record) == {"max_model_len", "capacity", "prompt_tokens", "status", "detail"}
+    assert record["capacity"] == 8192 - 1024 - 64
+    for required in nested["required"]:
+        assert required in record
+
+    # And the real validator agrees, including when the probe measured nothing at all.
+    unresolved = infrastructure_failure(
+        error_type="tokenizer_unavailable",
+        stage="preflight",
+        message="no tokenizer",
+        probe=Probe(prompt_tokens=None, budget=budget, status=STATUS_TOKENIZER_UNAVAILABLE),
+    )
+    assert unresolved["context_budget"]["prompt_tokens"] == 0
+    assert "detail" not in unresolved["context_budget"]
+
+
 @pytest.mark.parametrize(
     "row,expected",
     [
