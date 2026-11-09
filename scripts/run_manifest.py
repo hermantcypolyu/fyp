@@ -47,6 +47,12 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
 
+# The run-identity contract lives in `execution_gate` rather than here so the launcher can
+# recheck the same definition immediately before it starts a target. Two copies of this rule
+# would drift, and the copy that drifted would be the one standing between a mistaken config
+# and the previous run's evidence.
+from scripts.execution_gate import run_identity_checks
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: The arms of the experiment. `baseline` is the untrained control; `training` is the arm
@@ -1172,7 +1178,13 @@ def executable_report(manifest: dict[str, Any]) -> dict[str, Any]:
 
     settings = executed.get("settings") or {}
     artifacts = manifest.get("artifacts") or {}
+    # The paths the *config* says the run will write, as opposed to `artifacts`, which records
+    # what was actually produced. The identity check needs the config's own statement: a run
+    # directory that disagrees with the config is the failure being looked for, so it cannot
+    # be judged against the observed copies that were derived from the same disagreement.
+    intended = executed.get("artifacts") or {}
     blockers: list[str] = []
+    identity_warnings: list[str] = []
 
     # -- the config itself -----------------------------------------------------------
     if not executed.get("materialised"):
@@ -1220,8 +1232,42 @@ def executable_report(manifest: dict[str, Any]) -> dict[str, Any]:
         if executed.get("sha256") is None:
             blockers.append("execution_claim is true but executed.sha256 is null: the config cannot be re-verified")
 
+    # -- the run's identity has to name exactly one directory -------------------------
+    # A materialised config inherits `output.run_id` from a committed overlay, so it can name
+    # a *previous* attempt while sitting in a fresh run directory. Every field here was
+    # individually plausible in Phase 6I; only comparing them reveals the mismatch. An
+    # execution claim cannot survive it, because a rollout started from such a config writes
+    # its rollouts into the old run's directory and destroys both attempts' evidence.
+    #
+    # The comparison itself is the same in both modes - only its consequence differs. A
+    # manifest that claims execution is refused; an inspection-only manifest reports the
+    # mismatch as a warning and stays non-executable, because there is nothing to refuse and
+    # a description is allowed to describe a broken run.
+    identity_reasons = run_identity_checks(
+        cli_run_id=manifest.get("run_id"),
+        manifest_run_id=manifest.get("run_id"),
+        executed_run_id=settings.get("run_id"),
+        config_run_id=settings.get("run_id"),
+        run_dir=intended.get("run_dir"),
+        output_paths={
+            "output.rollouts": intended.get("trace"),
+            "output.private": intended.get("private_trace"),
+            "output.failures": intended.get("failures"),
+        },
+    )
+    if claims_execution:
+        # The reasons already start with "run identity:" so they read the same in either place.
+        blockers.extend(identity_reasons)
+    else:
+        # Same shape as the warnings `classify_fields` produces, because the CLI renders them
+        # by field and reason. A plain string here would crash the report at print time, which
+        # is how this was caught: the refusal path runs before the file is written, so an
+        # exception there leaves the operator with a traceback instead of a diagnosis.
+        identity_warnings = [{"field": "run_id", "reason": reason} for reason in identity_reasons]
+
     # -- anything else still unresolved ----------------------------------------------
     classification = classify_fields(manifest)
+    warnings = classification["warnings"] + identity_warnings
     for field in classification["blockers"]:
         # These are recorded gaps the specific checks above may not cover (a missing GPU
         # row, an overlay that vanished, an untracked file). They block because nothing has
@@ -1235,7 +1281,7 @@ def executable_report(manifest: dict[str, Any]) -> dict[str, Any]:
         "ok": not blockers,
         "reason": reason,
         "blockers": blockers,
-        "warnings": classification["warnings"],
+        "warnings": warnings,
         "not_applicable": classification["not_applicable"],
         "status": "executable" if not blockers else "preflight_failed",
     }

@@ -83,6 +83,21 @@ def materialise(overlay_path: Path, base_path: Path | None = None) -> dict[str, 
     return _deep_merge(_load(base_path), overlay)
 
 
+def _run_dir_for(out: Path) -> str:
+    """The repo-relative run directory a materialised config at `out` belongs to.
+
+    Returns POSIX form because the paths are compared as POSIX paths elsewhere (the identity
+    check in `execution_gate`), and a Windows-style separator here would make every path
+    look like it lived outside the directory it was written into.
+    """
+    try:
+        return out.parent.relative_to(REPO_ROOT).as_posix()
+    except ValueError as exc:
+        raise MaterialiseError(
+            f"{out} is not inside the repository, so its run directory has no relative name"
+        ) from exc
+
+
 def _require(raw: dict[str, Any], dotted: str) -> Any:
     node: Any = raw
     for part in dotted.split("."):
@@ -90,6 +105,43 @@ def _require(raw: dict[str, Any], dotted: str) -> Any:
             raise MaterialiseError(f"materialised config is missing '{dotted}'; it is not runnable")
         node = node[part]
     return node
+
+
+def apply_run_identity(raw: dict[str, Any], run_id: str, run_dir: str) -> dict[str, Any]:
+    """Point every run-identity field at one run id and one directory, in place.
+
+    Why this is explicit rather than inferred from `--out`. The overlays live in `configs/`
+    and are committed, so their `output:` block names whichever run last exercised them. A
+    materialised copy inherits those values verbatim, and Phase 6I hit exactly that: the
+    config for a fresh run still declared the *previous* attempt's `output.run_id` and all
+    three of its output paths. Merging is not enough - the identity has to be replaced.
+
+    Every path is rewritten, not just `run_id`, because the collector opens the paths, not
+    the id. Overriding the id alone would produce a config that looks like it belongs to the
+    new run while writing its rollouts into the old run's directory, which is worse than the
+    mismatch it was meant to fix: the evidence would silently merge two attempts.
+
+    The four outputs are fixed here, by name, rather than discovered. A general rewrite of
+    "any path under the old run directory" would silently miss a path that pointed somewhere
+    else entirely, which is a case worth failing on rather than repairing quietly.
+    """
+    if not isinstance(run_id, str) or not run_id.strip() or "/" in run_id:
+        raise MaterialiseError(f"run id {run_id!r} is not a usable directory name")
+    run_id = run_id.strip()
+    run_dir = run_dir.rstrip("/")
+
+    output = raw.get("output")
+    if not isinstance(output, dict):
+        raise MaterialiseError("materialised config has no `output:` mapping to bind to this run")
+
+    output["run_id"] = run_id
+    output["rollouts"] = f"{run_dir}/rollouts.jsonl"
+    output["failures"] = f"{run_dir}/rollouts_failures.jsonl"
+    output["private"] = f"{run_dir}/rollouts_private.jsonl"
+    # Analysis output is not under `results/raw/`, so it is derived from the run directory's
+    # parent rather than assumed to be a sibling of the rollouts file.
+    output["analysis"] = f"results/analysis/{run_id}.json"
+    return raw
 
 
 def validate(raw: dict[str, Any]) -> dict[str, Any]:
@@ -150,6 +202,11 @@ def main(argv: list[str] | None = None) -> int:
         "--base", default=None, help=f"Base config (default: the overlay's `extends:`, else {DEFAULT_BASE})"
     )
     parser.add_argument("--out", required=True, help="Repo-relative path to write the materialised config")
+    parser.add_argument(
+        "--run-id",
+        required=True,
+        help="Run id to bind into output.run_id and every output path (defaults to no run identity: refused)",
+    )
     parser.add_argument("--force", action="store_true", help="Overwrite an existing output file")
     args = parser.parse_args(argv)
 
@@ -159,9 +216,23 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         merged = materialise(overlay, base)
+        # Bind the identity before validating, so validation reports the values a run would
+        # actually use rather than the overlay's inherited ones.
+        run_dir = _run_dir_for(out)
+        apply_run_identity(merged, args.run_id, run_dir)
         settings = validate(merged)
     except MaterialiseError as exc:
         print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+
+    # The output path has to agree with the run it now claims to be, or the file would be
+    # written into a directory that its own identity does not name.
+    if out.parent.name != args.run_id and out.parent.parent.name != args.run_id:
+        print(
+            f"refusing: --out {args.out} is not inside a directory named {args.run_id!r}; "
+            "the materialised config would name a run it is not stored under",
+            file=sys.stderr,
+        )
         return 2
 
     # The output is never a silent overwrite: a materialised config is evidence of what a
@@ -178,6 +249,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  overlay   : {overlay}")
     for key in ("run_id", "tasks", "rollouts_per_task", "diagnostic_only", "model_name", "seed"):
         print(f"  {key:12}: {settings[key]}")
+    # The paths are printed because they are the thing that went wrong in Phase 6I: the file
+    # looked right and only the identity fields disagreed with the directory it sat in.
+    bound = merged.get("output") or {}
+    for key in ("rollouts", "private", "failures", "analysis"):
+        print(f"  output.{key:9}: {bound.get(key)}")
     return 0
 
 

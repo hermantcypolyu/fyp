@@ -120,16 +120,37 @@ def _git(root: Path, *args: str, env: dict[str, str] | None = None) -> str:
     return done.stdout.strip()
 
 
+#: The run id the fixture's config and manifest share. These cases are about the argument
+#: boundary, so the identity has to be consistent for authorisation to be reached at all - a
+#: mismatched identity is now its own refusal, and leaving the fixture inconsistent would make
+#: every case here fail on the wrong reason.
+FIXTURE_RUN_ID = "launcher_boundary_20261107T000000Z"
+
+
 def _claimable_manifest(gate: Any, root: Path, *, claim: bool = True) -> dict[str, Any]:
     """A manifest that satisfies every condition, so a case can break exactly one."""
     config_rel = "configs/merged_config.yaml"
     target = root / config_rel
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("run:\n  rollouts_per_task: 4\n", encoding="utf-8")
+    run_dir = f"results/raw/{FIXTURE_RUN_ID}"
+    # The identity fields are populated: the launcher rechecks them immediately before it
+    # executes, so a manifest without them is refused before it ever reaches the target.
+    target.write_text(
+        "run:\n"
+        "  rollouts_per_task: 4\n"
+        "output:\n"
+        f"  run_id: {FIXTURE_RUN_ID}\n"
+        f"  rollouts: {run_dir}/rollouts.jsonl\n"
+        f"  failures: {run_dir}/rollouts_failures.jsonl\n"
+        f"  private: {run_dir}/rollouts_private.jsonl\n"
+        f"  analysis: results/analysis/{FIXTURE_RUN_ID}.json\n",
+        encoding="utf-8",
+    )
     _git(root, "add", "-A")
     _git(root, "commit", "-m", "config")
     head = gate.current_head(root)
     return {
+        "run_id": FIXTURE_RUN_ID,
         "execution_claim": claim,
         "outcome": {"status": "executable" if claim else "planned"},
         "execution_blockers": [],
@@ -137,7 +158,23 @@ def _claimable_manifest(gate: Any, root: Path, *, claim: bool = True) -> dict[st
         "executed": {
             "path": config_rel,
             "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
-            "settings": {"tasks": ["t1"], "rollouts_per_task": 4},
+            "settings": {"tasks": ["t1"], "rollouts_per_task": 4, "run_id": FIXTURE_RUN_ID},
+            "artifacts": {
+                "run_dir": run_dir,
+                "trace": f"{run_dir}/rollouts.jsonl",
+                "private_trace": f"{run_dir}/rollouts_private.jsonl",
+                "failures": f"{run_dir}/rollouts_failures.jsonl",
+                "summary": f"{run_dir}/collection_summary.json",
+            },
+        },
+        "artifacts": {
+            "run_dir": run_dir,
+            "trace": f"{run_dir}/rollouts.jsonl",
+            "private_trace": f"{run_dir}/rollouts_private.jsonl",
+            "failures": f"{run_dir}/rollouts_failures.jsonl",
+            "summary": f"{run_dir}/collection_summary.json",
+            "log": None,
+            "server_pid": None,
         },
         "gpu": {"present": True},
     }

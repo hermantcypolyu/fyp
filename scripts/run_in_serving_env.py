@@ -243,6 +243,31 @@ def _require_manifest(manifest_path: str | None) -> int | None:
         print(execution_gate.format_refusal(result), file=sys.stderr)
         return execution_gate.EXIT_NOT_AUTHORISED
 
+    # The claim above re-hashes the config, so a file edited since the manifest was written is
+    # already refused. What it does not check is whether the config still *names this run*:
+    # the hash can be recomputed into a fresh manifest for a config that points at a
+    # different run's directory, and then every individual check passes while the rollout
+    # writes into a previous attempt's evidence.
+    #
+    # This is deliberately a second read of the file rather than a reuse of anything cached
+    # above, so the answer describes the bytes that exist now. It runs after the claim check
+    # but before the interpreter probe: an unauthorised launch should fail on identity, not on
+    # a missing venv.
+    identity = execution_gate.verify_run_identity(manifest)
+    if not identity["ok"]:
+        print(
+            "refusing to start: the run identity is not consistent.",
+            file=sys.stderr,
+        )
+        for reason in identity["reasons"]:
+            print(f"  BLOCKER: {reason}", file=sys.stderr)
+        print(
+            "  The config named here does not describe the run directory it sits in, so a "
+            "rollout started from it would write into a different run's evidence.",
+            file=sys.stderr,
+        )
+        return execution_gate.EXIT_NOT_AUTHORISED
+
     print(f"[run_in_serving_env] authorised by {path}", file=sys.stderr)
     return None
 

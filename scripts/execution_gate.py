@@ -30,8 +30,9 @@ CPU-only: these checks touch only git, the filesystem and the manifest dict.
 from __future__ import annotations
 
 import hashlib
+import posixpath
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +82,166 @@ def file_sha256(path: Path) -> str | None:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError:
         return None
+
+
+#: Every `output.*` path a run writes, and the manifest artifact field it is recorded under.
+#: The run-directory identity is checked over all of them: a rollout whose public trace lands
+#: in one run's directory and whose private trace lands in another is not one run, and the
+#: evidence cannot be assembled afterwards.
+#:
+#: `output.analysis` is deliberately absent. It is real - the collector writes a per-run
+#: analysis file - but it is not a manifest artifact field (`OUTPUT_MAP` in
+#: `scripts/run_manifest.py` maps `output.rollouts` to both `trace` and `run_dir`, and derives
+#: `summary` as a *sibling* of the trace), and it legitimately lives in `results/analysis/`
+#: rather than inside the run directory. Requiring it under the run directory would fail every
+#: correctly-prepared run. It is still bound to the run id by its filename, which the
+#: materialiser enforces; it is simply not evidence that has to sit in the run directory.
+OUTPUT_PATH_FIELDS: tuple[tuple[str, str], ...] = (
+    ("output.rollouts", "trace"),
+    ("output.private", "private_trace"),
+    ("output.failures", "failures"),
+)
+
+
+def _posix(value: Any) -> str | None:
+    """A repo-relative POSIX path with `.` and `..` resolved, or None if unusable.
+
+    `normpath` rather than `PurePosixPath` alone: `PurePosixPath("a/b/../c")` reports its
+    parents as `a/b/..` and `a/b`, so a path that escapes the run directory with `..` would
+    be judged to be *under* it. The path being compared is a claim about where evidence
+    lands, so it has to be normalised before it is compared, not after.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return posixpath.normpath(value.strip())
+
+
+def run_identity_checks(
+    *,
+    cli_run_id: str | None,
+    manifest_run_id: Any,
+    executed_run_id: Any,
+    config_run_id: Any,
+    run_dir: Any,
+    output_paths: dict[str, Any],
+) -> list[str]:
+    """Every way the run's identity can fail to name one directory.
+
+    The contract is one sentence: the CLI run id, the manifest's `run_id`, the executed
+    config's `output.run_id`, and the basename of the result directory are the same string,
+    and every output path the run writes is inside that directory.
+
+    It exists because a materialised config inherits `output.run_id` from a committed overlay.
+    Phase 6I prepared a run under a fresh id while its config still named the previous
+    attempt, so a rollout started from it would have written rollouts, private rows and
+    failure records into the *failed* run's directory - mixing two attempts into one set of
+    evidence, and destroying the failed attempt's evidence in the process. Nothing in the
+    manifest was individually false; the mismatch was only visible by comparing fields that
+    had never been compared.
+
+    Returns a list of reasons; empty means the identity is consistent. Paths are compared as
+    POSIX paths with `..` resolved, so `results/raw/x/../y` cannot pass as `results/raw/x`.
+    """
+    reasons: list[str] = []
+
+    normalised = {
+        "manifest run_id": manifest_run_id,
+        "executed run_id": executed_run_id,
+        "config output.run_id": config_run_id,
+    }
+    for label, value in normalised.items():
+        if not isinstance(value, str) or not value.strip():
+            reasons.append(f"run identity: {label} is missing or empty")
+        elif cli_run_id is not None and value.strip() != cli_run_id.strip():
+            reasons.append(f"run identity: {label} is {value.strip()!r} but the run id is {cli_run_id.strip()!r}")
+
+    declared_dir = _posix(run_dir)
+    if declared_dir is None:
+        reasons.append("run identity: the result directory is not recorded")
+        return reasons
+
+    if cli_run_id is not None:
+        basename = PurePosixPath(declared_dir).name
+        if basename != cli_run_id.strip():
+            reasons.append(
+                f"run identity: the result directory basename is {basename!r} but the run id is {cli_run_id.strip()!r}"
+            )
+
+    # Every output the run writes has to live under that one directory.
+    root = PurePosixPath(declared_dir)
+    for key, field in OUTPUT_PATH_FIELDS:
+        raw = output_paths.get(key)
+        if raw is None:
+            # Absence is the caller's business (`run_manifest` blocks on a missing required
+            # path itself); a null here is not an identity mismatch.
+            continue
+        candidate = _posix(raw)
+        if candidate is None:
+            reasons.append(f"{key} is not a usable path: {raw!r}")
+            continue
+        if PurePosixPath(candidate) == root or root in PurePosixPath(candidate).parents:
+            continue
+        reasons.append(
+            f"{key} is outside the run directory: {candidate} is not under {root} (recorded as artifacts.{field})"
+        )
+
+    return reasons
+
+
+def verify_run_identity(manifest: dict[str, Any], *, repo_root: Path | None = None) -> dict[str, Any]:
+    """Re-read the executed config and check the run identity against the manifest.
+
+    This is the launcher's second opinion. `run_manifest.py` compares the fields when it
+    writes the manifest, but a manifest can be written on Monday and used on Tuesday, and
+    the specific hazard here is a config *replaced* after the manifest named it. Re-reading
+    the file is what makes that detectable: the recorded identity is the manifest's, the
+    observed identity is whatever the config says now.
+
+    Returns ``{"ok": bool, "reasons": [...], "checked": {...}}`` like
+    `verify_execution_claim`, so the launcher can report both in the same shape.
+    """
+    import yaml
+
+    root = repo_root or REPO_ROOT
+    executed = manifest.get("executed") or {}
+    artifacts = manifest.get("artifacts") or {}
+    config_rel = executed.get("path")
+    checked: dict[str, Any] = {"config_path": config_rel}
+
+    if not config_rel:
+        return {
+            "ok": False,
+            "reasons": ["run identity cannot be checked: no executed config is recorded"],
+            "checked": checked,
+        }
+
+    path = root / config_rel
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        return {
+            "ok": False,
+            "reasons": [f"run identity cannot be checked: the executed config could not be read: {exc}"],
+            "checked": checked,
+        }
+
+    output = raw.get("output") if isinstance(raw, dict) else None
+    output = output if isinstance(output, dict) else {}
+    checked["config_run_id"] = output.get("run_id")
+
+    reasons = run_identity_checks(
+        cli_run_id=manifest.get("run_id"),
+        manifest_run_id=manifest.get("run_id"),
+        executed_run_id=(executed.get("settings") or {}).get("run_id"),
+        config_run_id=output.get("run_id"),
+        run_dir=artifacts.get("run_dir"),
+        output_paths={
+            "output.rollouts": output.get("rollouts"),
+            "output.private": output.get("private"),
+            "output.failures": output.get("failures"),
+        },
+    )
+    return {"ok": not reasons, "reasons": reasons, "checked": checked}
 
 
 def verify_execution_claim(
