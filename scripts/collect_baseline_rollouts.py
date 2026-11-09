@@ -593,6 +593,36 @@ class RolloutOutcome:
         return self.infrastructure_failure is None
 
 
+#: Workspace-path guidance appended to the system prompt as its own block.
+#:
+#: Added for the Phase 6J controlled comparison. Phase 6I scored -1.0 on all four
+#: rollouts because the model addressed files as `src/pagination.py` while the sandbox
+#: only resolves paths under `repo/`; 20 of 20 tool calls hit "no such file" and the
+#: worked example below used to teach the same unprefixed shape. This block states the
+#: root and the required prefix, and tells the model what to do when a path misses.
+#:
+#: Deliberately says nothing about the bug, the tests, or a reference solution: it is
+#: navigation guidance only, so a difference against Phase 6I is attributable to path
+#: handling and not to leaking the answer.
+WORKSPACE_PATH_GUIDANCE = """## Workspace paths
+
+The repository root is `repo/`.
+
+All file paths passed to repository tools must begin with `repo/`.
+
+The repository layout is:
+
+    repo/
+    ├── src/
+    │   └── pagination.py
+    └── tests/
+
+Pass `repo/src/pagination.py`, not `src/pagination.py`.
+
+If a file operation returns 'no such file', do not repeat the identical tool call.
+Inspect the available repository paths and correct the path."""
+
+
 def _system_prompt(cfg: BaselineConfig) -> str:
     """The configured system message with the tool catalogue appended as text.
 
@@ -607,8 +637,10 @@ def _system_prompt(cfg: BaselineConfig) -> str:
         "Put every argument inside `arguments`."
     )
     lines.append("")
+    lines.append(WORKSPACE_PATH_GUIDANCE)
+    lines.append("")
     lines.append("Example - read the first 50 lines of a file:")
-    lines.append('  {"name": "read_file", "arguments": {"path": "src/app.py", "start": 1, "end": 50}}')
+    lines.append('  {"name": "read_file", "arguments": {"path": "repo/src/pagination.py", "start": 1, "end": 50}}')
     lines.append("")
     lines.append("Available tools:")
     for definition in TOOL_DEFINITIONS:
