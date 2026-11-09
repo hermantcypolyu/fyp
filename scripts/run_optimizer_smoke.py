@@ -30,7 +30,9 @@ import argparse
 import gc
 import json
 import math
+import os
 import statistics
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -56,6 +58,7 @@ from training.phase7_guards import (
     count_changed_tensors,
     load_permitted_model,
     load_permitted_tokenizer,
+    normalise_for_guard,
     tensor_digest,
     validate_execution_plan,
     validate_rollout_group,
@@ -145,7 +148,10 @@ def load_samples(path: Path) -> tuple[list[EpisodeTrainingSample], list[dict[str
 
     # Cardinality, single-task, uniqueness and the exact reward sequence are all
     # checked on the raw rows before a single model or tokenizer is constructed.
-    validate_rollout_group(rows)
+    # The recorded trace nests the guard's fields (`agent.rollout_index`,
+    # `result.reward`, `task.id`), so project first; the guard validates the
+    # projection while the rows below stay untouched.
+    validate_rollout_group(normalise_for_guard(rows))
 
     samples: list[EpisodeTrainingSample] = []
 
@@ -283,6 +289,39 @@ def main() -> None:
     if args.temperature <= 0:
         raise ValueError("temperature must be positive")
 
+    # ---- Phase 7 environment gate: interpreter and device visibility ----
+    #
+    # Both checks run before the model guard and before any CUDA initialisation.
+    # The wrong interpreter is the failure mode that is easiest to miss: a bare
+    # `python3` on this host is 3.10 and cannot even import this module, while a
+    # third-party venv may carry a different torch. Pinning the interpreter here
+    # means a mistaken invocation stops immediately instead of training for
+    # several minutes on an unintended stack.
+    if sys.version_info[:2] != (3, 12):
+        raise Phase7Violation(
+            f"Python 3.12.x is required for Phase 7; this interpreter is "
+            f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro} "
+            f"({sys.executable})."
+        )
+
+    visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    print("Interpreter:", sys.executable)
+    print("Python:", sys.version.split()[0])
+    print("CUDA_VISIBLE_DEVICES:", visible_devices or "<unset>")
+
+    # Exactly one visible device, and it must be requested explicitly. Without
+    # this, an unset CUDA_VISIBLE_DEVICES would let torch enumerate every card and
+    # the `cuda:0` below could silently land on someone else's GPU.
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available.")
+    device_count = torch.cuda.device_count()
+    print("torch.cuda.device_count():", device_count)
+    if device_count != 1:
+        raise Phase7Violation(
+            f"Phase 7 requires exactly one visible CUDA device; torch sees {device_count}. "
+            "Set CUDA_VISIBLE_DEVICES to a single GPU."
+        )
+
     # ---- Phase 7 gate: everything here happens before any model load ----
     #
     # Order matters and is deliberate. The model guard runs first because it is
@@ -320,10 +359,18 @@ def main() -> None:
 
     device = torch.device("cuda:0")
 
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is not available.")
-
-    print("GPU:", torch.cuda.get_device_name(device))
+    # Logical index 0 is the only visible device, so it is the only device that
+    # can be reached. Record what it physically maps to, because the record is
+    # the evidence that this run did not land on another card.
+    free_bytes, total_bytes = torch.cuda.mem_get_info(device)
+    used_bytes = total_bytes - free_bytes
+    mib = 1024 * 1024
+    physical_indices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    print("GPU name:", torch.cuda.get_device_name(device))
+    print("Visible logical index: 0 (physical CUDA_VISIBLE_DEVICES entry:", physical_indices, ")")
+    print(
+        f"Memory before load: total {total_bytes // mib} MiB, used {used_bytes // mib} MiB, free {free_bytes // mib} MiB"
+    )
     print("Model:", args.model)
     print("Revision:", args.revision)
     print("Loading rollouts:", args.rollouts)

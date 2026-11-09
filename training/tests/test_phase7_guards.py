@@ -40,6 +40,11 @@ from training.phase7_guards import (  # noqa: E402 - importorskip must run first
     count_changed_tensors,
     load_permitted_model,
     load_permitted_tokenizer,
+    normalise_for_guard,
+    reward_of,
+    rollout_index_of,
+    seed_of,
+    task_id_of,
     validate_execution_plan,
     validate_rollout_group,
     verify_model_identity,
@@ -316,6 +321,94 @@ def test_ineligible_row_rejected():
 
     with pytest.raises(Phase7Violation, match="not eligible"):
         validate_rollout_group(rows)
+
+
+# ---------------------------------------------------------------------------
+# Recorded trace shape
+# ---------------------------------------------------------------------------
+#
+# The real Phase 6M rows nest the fields the guard reads: `agent.rollout_index`,
+# `result.reward`, `agent.sampling_seed`, `task.id`. A version of this guard that
+# only understood flat rows passed its own tests and then refused the real file
+# at run time, so the nested shape gets tests of its own.
+
+
+def make_trace_row(index: int, reward: float) -> dict:
+    return {
+        "rollout_id": f"phase6m__r{index:02d}",
+        "task": {"id": TASK_ID, "split": "train"},
+        "agent": {"rollout_index": index, "sampling_seed": 1000 + index},
+        "result": {"reward": reward},
+        "error": None,
+    }
+
+
+def make_trace_rows(rewards=PERMITTED_REWARDS) -> list[dict]:
+    return [make_trace_row(index, reward) for index, reward in enumerate(rewards)]
+
+
+def test_accessors_read_nested_trace_fields():
+    row = make_trace_row(2, -1.0)
+
+    assert rollout_index_of(row) == 2
+    assert reward_of(row) == -1.0
+    assert seed_of(row) == 1002
+    assert task_id_of(row) == TASK_ID
+
+
+def test_normalise_projects_nested_rows_onto_the_guard_shape():
+    flat = normalise_for_guard(make_trace_rows())
+
+    assert [row["rollout_index"] for row in flat] == [0, 1, 2, 3]
+    assert [row["reward"] for row in flat] == [0.0, -1.0, -1.0, -1.0]
+    assert all(row["eligible_for_training"] is True for row in flat)
+
+
+def test_nested_canonical_group_passes_the_guard():
+    """The exact failure that stopped the first GPU attempt: real rows, real shape."""
+    validated = validate_rollout_group(normalise_for_guard(make_trace_rows()))
+
+    assert len(validated) == 4
+
+
+def test_nested_permuted_rewards_still_rejected():
+    rows = make_trace_rows(rewards=(-1.0, 0.0, -1.0, -1.0))
+
+    with pytest.raises(Phase7Violation, match="rollout_index order"):
+        validate_rollout_group(normalise_for_guard(rows))
+
+
+def test_nested_row_with_error_is_ineligible():
+    rows = make_trace_rows()
+    rows[1]["error"] = "vllm timeout"
+
+    with pytest.raises(Phase7Violation, match="not eligible"):
+        validate_rollout_group(normalise_for_guard(rows))
+
+
+def test_missing_nested_fields_raise_rather_than_defaulting():
+    """A row whose identity cannot be read must not silently become index-by-position."""
+    row = make_trace_row(0, 0.0)
+    del row["agent"]
+
+    with pytest.raises(Phase7Violation, match="no rollout_index"):
+        rollout_index_of(row)
+
+
+def test_missing_task_id_raises_rather_than_defaulting():
+    row = make_trace_row(0, 0.0)
+    del row["task"]
+
+    with pytest.raises(Phase7Violation, match="no task id"):
+        task_id_of(row)
+
+
+def test_missing_reward_raises_rather_than_defaulting():
+    row = make_trace_row(0, 0.0)
+    del row["result"]
+
+    with pytest.raises(Phase7Violation, match="no reward"):
+        reward_of(row)
 
 
 # ---------------------------------------------------------------------------

@@ -19,6 +19,8 @@ from scripts.build_phase7_input_manifest import (
     ABSENT_ANALYSIS_PATH,
     build_manifest,
     canonical_row_sha256,
+)
+from training.phase7_guards import (
     normalise_for_guard,
     reward_of,
     rollout_index_of,

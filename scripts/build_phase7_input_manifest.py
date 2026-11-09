@@ -51,6 +51,8 @@ from training.phase7_guards import (
     PERMITTED_REWARDS,
     REQUIRED_ROLLOUT_COUNT,
     Phase7Violation,
+    normalise_for_guard,
+    seed_of,
     validate_rollout_group,
 )
 
@@ -83,62 +85,6 @@ def canonical_row_sha256(row: dict[str, Any]) -> str:
     """Stable digest of one row: sorted keys, no whitespace, UTF-8."""
     payload = json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def rollout_index_of(row: dict[str, Any]) -> Any:
-    """The rollout's index, which lives under `agent` in the recorded trace.
-
-    It is not a top-level field. Reading `row["rollout_index"]` would have raised
-    a KeyError; defaulting it to the enumeration position would have silently
-    replaced the recorded identity with the file order. Both are worth avoiding,
-    so the accessor is narrow and the caller validates the result.
-    """
-    agent = row.get("agent")
-    if isinstance(agent, dict) and "rollout_index" in agent:
-        return agent["rollout_index"]
-    return row.get("rollout_index")
-
-
-def reward_of(row: dict[str, Any]) -> Any:
-    """The rollout's scalar reward, recorded under `result.reward`."""
-    result = row.get("result")
-    if isinstance(result, dict) and "reward" in result:
-        return result["reward"]
-    return row.get("reward")
-
-
-def seed_of(row: dict[str, Any]) -> Any:
-    """The per-rollout sampling seed, recorded under `agent.sampling_seed`."""
-    agent = row.get("agent")
-    if isinstance(agent, dict):
-        return agent.get("sampling_seed")
-    return row.get("sampling_seed")
-
-
-def task_id_of(row: dict[str, Any]) -> Any:
-    """The task id, recorded under `task.id`."""
-    task = row.get("task")
-    if isinstance(task, dict) and "id" in task:
-        return task["id"]
-    return row.get("task_id")
-
-
-def normalise_for_guard(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Project recorded rows onto the flat shape `validate_rollout_group` expects.
-
-    The guard works on `task_id` / `rollout_index` / `reward` because those are
-    the fields that decide whether the group is admissible. The trace nests them;
-    this is the one place that knowledge lives.
-    """
-    return [
-        {
-            "task_id": task_id_of(row),
-            "rollout_index": rollout_index_of(row),
-            "reward": reward_of(row),
-            "eligible_for_training": row.get("error") is None,
-        }
-        for row in rows
-    ]
 
 
 def build_manifest(rollouts_path: Path, *, hardware: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -200,6 +200,68 @@ def _reward_of(row: Mapping[str, Any]) -> float:
     return float(reward)
 
 
+# The recorded trace nests the fields the guard needs: `agent.rollout_index`,
+# `result.reward`, `agent.sampling_seed`, `task.id`. Earlier code assumed the
+# group fields were top-level, which fails against the real Phase 6M file. These
+# accessors accept the nested shape and fall back to the flat shape, so the guard
+# and the manifest describe the same rows the same way.
+
+
+def rollout_index_of(row: Mapping[str, Any]) -> Any:
+    if "rollout_index" in row:
+        return row["rollout_index"]
+    agent = row.get("agent")
+    if isinstance(agent, Mapping) and "rollout_index" in agent:
+        return agent["rollout_index"]
+    raise Phase7Violation("rollout row has no rollout_index (checked top level and agent)")
+
+
+def reward_of(row: Mapping[str, Any]) -> float:
+    if "reward" in row:
+        return _reward_of(row)
+    result = row.get("result")
+    if isinstance(result, Mapping) and "reward" in result:
+        return _reward_of(result)
+    raise Phase7Violation("rollout row has no reward (checked top level and result)")
+
+
+def seed_of(row: Mapping[str, Any]) -> Any:
+    if "sampling_seed" in row:
+        return row["sampling_seed"]
+    agent = row.get("agent")
+    if isinstance(agent, Mapping) and "sampling_seed" in agent:
+        return agent["sampling_seed"]
+    return None
+
+
+def task_id_of(row: Mapping[str, Any]) -> str:
+    if isinstance(row.get("task_id"), str):
+        return row["task_id"]
+    task = row.get("task")
+    if isinstance(task, Mapping) and isinstance(task.get("id"), str):
+        return task["id"]
+    raise Phase7Violation("rollout row has no task id (checked task_id and task.id)")
+
+
+def normalise_for_guard(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Project recorded trace rows onto the flat shape `validate_rollout_group` expects.
+
+    This is a projection, not a rewrite: it copies the identity fields the guard
+    reads and records the same eligibility rule the trainer applies (a row that
+    carries an infrastructure error is not a training candidate). The original
+    rows are never mutated or reordered.
+    """
+    return [
+        {
+            "task_id": task_id_of(row),
+            "rollout_index": rollout_index_of(row),
+            "reward": reward_of(row),
+            "eligible_for_training": row.get("error") is None,
+        }
+        for row in rows
+    ]
+
+
 def validate_rollout_group(
     rows: Sequence[Mapping[str, Any]],
     *,
