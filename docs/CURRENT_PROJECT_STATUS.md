@@ -967,13 +967,37 @@ models was verified bit-for-bit, so the context budget stayed a controlled varia
 
 - Infrastructure: 4 of 4 rows valid, 0 infrastructure-invalid, 0 context overflow, 80 POSTs all
   200.
-- Behaviour: mean tool calls 5.25 → 10.75, successful edits 0 → 18, `run_tests` 0 → 1,
-  non-empty patches 0 → 2, parseable tool-call rows 2/4 → 3/4.
+- Behaviour: mean tool calls 5.25 → 10.75, successful edits 0 → 18, `run_tests` attempts 0 → 1
+  (**that single call failed**, so successful `run_tests` executions stayed 0), non-empty patches
+  0 → 2, parseable tool-call rows 2/4 → 3/4.
 - Reward: **1 distinct value (−1.0), stdev 0.0, 0 solved — identical to 6K.**
 - Both non-empty patches fail on the merits: one is semantically wrong (inflates `per_page`
   instead of fixing `total_pages`), one is syntactically broken (a line repeated 16×).
 - **Decision: C — no material improvement over 1.5B.**
 - New defect surfaced: `run_tests` reports `No module named pytest` in the serving interpreter.
+  **Corrected in Phase 6M.**
+
+**Phase 6M — test-runner environment correction and diagnostic rerun (closed)**
+
+A narrow infrastructure fix plus one rerun of the 6L arm under identical conditions. No model,
+task, prompt, tool, reward, seed, sampling, budget or verifier setting was changed; `make check`
+and the held-out seal were green before execution. Full record:
+`docs/PHASE6M_TEST_RUNNER_CORRECTION.md`.
+
+- **Root cause.** `run_tests` invoked pytest with `sys.executable`. Rollouts execute under the
+  serving venv, which omits the project's `dev` extras, so pytest was never importable there.
+  The defect was present in 6I, 6J, 6K and 6L alike, which is why *no* arm ever recorded a
+  successful `run_tests` call.
+- **Fix.** Test execution is pinned to the project interpreter
+  (`.venv/bin/python`, overridable via `FYP_TEST_PYTHON`). A missing pytest is classified as an
+  infrastructure error and told to the agent as such, never scored as a model failure. The
+  serving venv is not mutated.
+- **Result.** Successful `run_tests` executions 0 → 2 (both parsed real counts: `2/3`, then
+  `3/3` after an edit). Reward distribution widened from `{-1.0: 4}` to `{-1.0: 3, 0.0: 1}`,
+  stdev 0.0 → 0.433, and one rollout submitted and scored `6/11` grading tests with no gates.
+  First non-floor, non-empty submission in the whole series.
+- **Still not a training group.** 0 of 4 solved, 3 of 4 rows still `no_submit`, and the 0.0 row
+  was a partial fix on a binary pass/fail task. Phase 7 remains blocked.
 
 **Phase 6 closure — final status**
 
@@ -989,9 +1013,9 @@ models was verified bit-for-bit, so the context budget stayed a controlled varia
 | 8 | Phase 7 readiness | **blocked** |
 | 9 | Reason | **uniform floor reward and no usable agent workflow** |
 
-Phase 6 is **closed**. Phase 7 is **not approved**. A final 7B diagnostic is not recommended on
-current evidence: the failure mode is stable across two model sizes, and the cheaper next steps
-are fixing the `run_tests` environment and re-examining task design.
+Phase 6 is **closed**. Phase 7 is **not approved**. Model capacity is a closed question: it was
+tested once (1.5B → 3B) and is not to be retested at any larger size. The failure mode is stable
+across two model sizes, and the next steps are task design and the reward signal, not scale.
 
 ---
 

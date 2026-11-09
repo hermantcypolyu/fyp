@@ -113,7 +113,8 @@ gradient, so declaring this a usable training group would be false.
 | Correct-path calls | 21 | **41** |
 | Successful file reads | 20 | **18** |
 | Successful edits | 0 | **18** |
-| `run_tests` calls | 0 | **1** |
+| `run_tests` calls *attempted* | 0 | **1** |
+| `run_tests` calls *that succeeded* | 0 | **0** |
 | Non-empty submissions | 0 | **2** |
 | Solved rollouts | 0 | **0** |
 | Reward distribution | `{-1.0: 4}` | `{-1.0: 4}` |
@@ -135,8 +136,7 @@ failure. See §6 for why that still does not make it category A.
 
 | # | Seed | Steps | Tools used | Successful edits | Patch chars | Gates | Termination |
 |---|---|---|---|---|---|---|---|
-| r00 | 184288048 | 3 | read_file → edit_file → run_tests | 1 | 394 | `no_submit`, `test_count_mismatch` | `max_turns` |
-| r01 | 3168762815 | 20 | 11× read_file, 5× edit_file (all failed) | 0 | 0 | `no_submit`, `test_count_mismatch` | `max_turns` |
+| r00 | 184288048 | 3 | read_file → edit_file → run_tests | 1 | 394 | `no_submit`, `test_count_mismatch` | `max_turns` || r01 | 3168762815 | 20 | 11× read_file, 5× edit_file (all failed) | 0 | 0 | `no_submit`, `test_count_mismatch` | `max_turns` |
 | r02 | 475852200 | 0 | **none** | 0 | 0 | `no_submit`, `test_count_mismatch` | `max_turns` |
 | r03 | 1693580453 | 20 | list_files, 2× read_file, 18× edit_file | 18 | 669 | `no_submit`, `syntax_broken`, `test_count_mismatch` | `max_turns` |
 
@@ -221,7 +221,7 @@ across 1.5B and 3B, which is why another capacity step is unlikely to change it.
 
 ## 7. Recommendation
 
-**A final 7B diagnostic is not justified on the current evidence, and I recommend against it as designed.**
+**No further model-capacity step is justified on this evidence, and no 7B arm will be run.**
 
 Reasoning:
 
@@ -232,17 +232,16 @@ Reasoning:
 - If capacity were the limiter, 3B should have moved *some* reward. It moved many tool calls and zero
   reward points.
 
-If the goal is a usable training group, the higher-yield next experiment is **not** another model size —
-it is either:
+If the goal is a usable training group, the next experiment is **not** another model size — it is either:
 
 1. **Fix the `run_tests` environment** (`pytest` missing in the serving interpreter). This is a verifiable
    infrastructure defect that blocks the verify step for every model, and 6L is the first phase that
-   surfaced it.
+   surfaced it. **Done in Phase 6M** — see `docs/PHASE6M_TEST_RUNNER_CORRECTION.md`.
 2. **Re-examine task design** — whether a 4-rollout single-task group can ever yield reward variation
    when the task is binary pass/fail with a submit-gated verifier.
 
-Both are cheaper than a 7B run and both attack a demonstrated defect. A 7B run would only be justified
-*after* those two are resolved and the reward still fails to vary.
+Model capacity is a **closed** question for this project. It was tested once (1.5B → 3B) and is not to be
+retested at any larger size.
 
 ---
 
